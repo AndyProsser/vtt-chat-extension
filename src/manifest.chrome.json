@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "VTT-Chat DDB Connector",
+  "version": "0.1.0",
+  "description": "Launch VTT-Chat sessions directly from D&D Beyond.",
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  },
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.dndbeyond.com/*",
+    "https://*.dndbeyond.com/*",
+    "https://api.dndbeyond.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icons/icon-48.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.dndbeyond.com/characters/*",
+        "https://www.dndbeyond.com/campaigns/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

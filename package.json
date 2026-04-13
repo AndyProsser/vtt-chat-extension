@@ -1,0 +1,50 @@
+{
+  "name": "vtt-chat-ddb-connector",
+  "version": "0.1.0",
+  "description": "Browser extension to launch VTT-Chat sessions from D&D Beyond",
+  "type": "module",
+  "main": "build.js",
+  "scripts": {
+    "build": "node build.js",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "clean": "rm -rf dist-*",
+    "package": "npm run build && npm run package:firefox && npm run package:chrome",
+    "package:firefox": "cd dist-firefox && zip -r ../vtt-chat-ddb-connector-firefox.zip .",
+    "package:chrome": "cd dist-chrome && zip -r ../vtt-chat-ddb-connector-chrome.zip ."
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  },
+  "eslintConfig": {
+    "env": {
+      "browser": true,
+      "es2021": true
+    },
+    "extends": [
+      "eslint:recommended"
+    ],
+    "parserOptions": {
+      "ecmaVersion": "latest",
+      "sourceType": "module"
+    },
+    "globals": {
+      "chrome": "readonly",
+      "browser": "readonly"
+    },
+    "rules": {
+      "no-unused-vars": "warn",
+      "no-console": "off"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andyprosser/vtt-chat-extension.git"
+  },
+  "author": "Andy Prosser",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/andyprosser/vtt-chat-extension/issues"
+  },
+  "homepage": "https://github.com/andyprosser/vtt-chat-extension#readme"
+}

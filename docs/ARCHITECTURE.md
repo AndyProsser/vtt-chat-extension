@@ -1,0 +1,482 @@
+Absolutely, Andy — I can create a **clean, authoritative ARCHITECTURE.md** that is specifically designed to guide GitHub AI tools (Copilot Chat, Copilot Workspace, Copilot Edits, etc.) so they always understand:
+
+- the purpose of the extension  
+- the structure of the repo  
+- the build system  
+- the onboarding flow  
+- the constraints  
+- the expected behavior  
+
+This document is written in a way that AI tools *love*: declarative, explicit, structured, and free of ambiguity.  
+It will help Copilot reason about your project without hallucinating or rewriting things incorrectly.
+
+Below is the full **ARCHITECTURE.md**.
+
+---
+
+# 🏗️ **ARCHITECTURE.md — VTT‑Chat DDB Connector Extension**
+
+This document defines the architecture, responsibilities, data flow, and build system for the **VTT‑Chat D&D Beyond Connector** browser extension.  
+It is written to guide **GitHub Copilot** and other AI tools so they can safely generate, modify, and extend the project.
+
+---
+
+# 1. 🎯 Purpose
+
+The extension enables **one‑click onboarding** into a self‑hosted **VTT‑Chat** server directly from **D&D Beyond**.
+
+It provides:
+
+- Automatic detection of logged‑in DDB users  
+- Character list retrieval  
+- Campaign details retrieval  
+- DM vs Player role detection  
+- Injection of a “Launch VTT‑Chat” button into DDB pages  
+- A unified `/api/connect` onboarding flow  
+- Multi‑server support with invite codes  
+- “Reopen last session” functionality  
+
+The extension works in **Firefox**, **Chrome**, and **Edge** using a shared codebase.
+
+---
+
+# 2. 🧩 High‑Level Architecture
+
+```
+extension/
+│
+├── create-extension.js         # Master build script
+├── create-content.js           # Generates content.js
+├── create-background.js        # Generates background.js
+├── create-ui.js                # Generates popup.html + popup.js
+├── create-manifests.js         # Generates manifest files
+│
+├── src/
+│   ├── content.js              # Injected into DDB pages
+│   ├── background.js           # Service worker (MV3)
+│   ├── popup.html              # Toolbar popup UI
+│   ├── popup.js                # Popup logic
+│   ├── manifest.base.json
+│   ├── manifest.firefox.json
+│   ├── manifest.chrome.json
+│
+├── icons/                      # User-provided icons
+│   ├── icon-48.png
+│   └── icon-96.png
+│
+├── dist-firefox/               # Build output for Firefox
+└── dist-chrome/                # Build output for Chrome/Edge
+```
+
+---
+
+# 3. 🧠 Core Components
+
+## 3.1 `content.js` — Page Integration Layer
+
+Runs on:
+
+- `https://www.dndbeyond.com/characters/*`
+- `https://www.dndbeyond.com/campaigns/*`
+
+Responsibilities:
+
+- Extract logged‑in DDB user (MegaMenu, Cobalt, Next.js Flight)
+- Fetch DDB auth token (`/v1/cobalt-token`)
+- Fetch character list
+- Fetch campaign details (`/campaigns/v1/details/:id`)
+- Determine:
+  - DM vs Player
+  - Character ownership
+  - Campaign membership
+- Inject “Launch VTT‑Chat” button
+- Send onboarding payload to background script
+
+### Data sent to background:
+
+```json
+{
+  "ddbUser": { "id": 123, "displayName": "...", "avatarUrl": "..." },
+  "ddbCampaignId": "123456",
+  "ddbCampaignName": "My Campaign",
+  "isDm": true,
+  "character": {
+    "ddbCharacterId": 987,
+    "name": "Kaelen",
+    "avatarUrl": "...",
+    "race": "Elf",
+    "className": "Ranger",
+    "level": 5
+  }
+}
+```
+
+---
+
+## 3.2 `background.js` — Server Communication Layer
+
+Responsibilities:
+
+- Manage server list + active server
+- Handle `connect` messages from content script
+- POST to `/api/connect` on the VTT‑Chat server
+- Open the returned session URL with `?token=...`
+- Store `lastSession` for relaunch
+- Provide cross‑browser compatibility (`browser` vs `chrome`)
+
+---
+
+## 3.3 `popup.html` + `popup.js` — Toolbar UI
+
+Responsibilities:
+
+- Manage list of VTT‑Chat servers
+- Allow adding/editing active server
+- Display server list with radio selector
+- Provide “Reopen last session” button
+- Use `browser.storage.local` for persistence
+
+---
+
+## 3.4 Manifest Files
+
+### `manifest.base.json`
+Shared across all browsers.
+
+### `manifest.firefox.json`
+Adds:
+
+- `browser_specific_settings`
+- `background.type = "module"`
+
+### `manifest.chrome.json`
+Chrome/Edge variant.
+
+---
+
+# 4. 🔐 Authentication & Data Flow
+
+## 4.1 DDB Authentication
+
+The extension uses:
+
+```
+POST https://auth-service.dndbeyond.com/v1/cobalt-token
+```
+
+This returns a JWT used for:
+
+- Character list API
+- Campaign details API
+
+## 4.2 Campaign Details API
+
+```
+GET https://api.dndbeyond.com/campaigns/v1/details/:id
+```
+
+Used to determine:
+
+- DM (`dmId`)
+- Active players
+- Active characters
+- Character ownership
+
+---
+
+# 5. 🚀 VTT‑Chat Onboarding Flow
+
+### 1. User clicks “Launch VTT‑Chat”
+### 2. content.js gathers:
+
+- DDB user
+- Character (if applicable)
+- Campaign details
+- DM flag
+
+### 3. content.js → background.js
+
+```
+browser.runtime.sendMessage({ type: "connect", payload })
+```
+
+### 4. background.js → VTT‑Chat server
+
+```
+POST /api/connect
+```
+
+### 5. Server returns:
+
+```json
+{
+  "sessionId": "abc123",
+  "role": "dm",
+  "token": "jwt...",
+  "appUrl": "/sessions/abc123"
+}
+```
+
+### 6. background.js opens:
+
+```
+https://server/sessions/abc123?token=jwt...
+```
+
+---
+
+# 🏗️ **6. Build System (Corrected & AI‑Guided)**
+
+The extension uses a **single Node.js build script** (`build.js`) to generate browser‑specific output bundles for **Firefox** and **Chrome/Edge** from a shared `src/` directory.
+
+The build system is intentionally simple and deterministic so AI tools can safely modify or extend it.
+
+---
+
+## 📁 **6.1 Source Layout**
+
+All editable source files live in:
+
+```
+src/
+  manifest.base.json
+  manifest.firefox.json
+  manifest.chrome.json
+  content.js
+  background.js
+  popup.html
+  popup.js
+  icons/
+```
+
+You manually place your icons inside:
+
+```
+src/icons/icon-48.png
+src/icons/icon-96.png
+```
+
+---
+
+## ⚙️ **6.2 Build Script (`build.js`)**
+
+This script:
+
+1. Loads `manifest.base.json`
+2. Merges it with either:
+   - `manifest.firefox.json`  
+   - `manifest.chrome.json`
+3. Writes the merged manifest to:
+   - `dist-firefox/manifest.json`
+   - `dist-chrome/manifest.json`
+4. Copies all extension assets from `src/` into the appropriate output folder
+
+Here is the **exact build script** used by the project:
+
+```js
+import fs from "fs";
+import path from "path";
+
+function load(file) {
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function write(dir, file, data) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, file), data);
+}
+
+function copy(src, destDir) {
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.cpSync(src, destDir, { recursive: true });
+}
+
+function build(target, overrideFile) {
+  const base = load("manifest.base.json");
+  const override = load(overrideFile);
+  const manifest = { ...base, ...override };
+
+  const srcDir = 'src';
+  const outDir = `dist-${target}`;
+  write(outDir, "manifest.json", JSON.stringify(manifest, null, 2));
+
+  // Copy extension files
+  copy(`${srcDir}/icons`, `${outDir}/icons`);
+  copy(`${srcDir}/content.js`, `${outDir}/content.js`);
+  copy(`${srcDir}/background.js`, `${outDir}/background.js`);
+  copy(`${srcDir}/popup.html`, `${outDir}/popup.html`);
+  copy(`${srcDir}/popup.js`, `${outDir}/popup.js`);
+}
+
+build("firefox", "manifest.firefox.json");
+build("chrome", "manifest.chrome.json");
+```
+
+---
+
+## 🧪 **6.3 Build Output**
+
+Running:
+
+```
+node build.js
+```
+
+Produces:
+
+```
+dist-firefox/
+  manifest.json
+  content.js
+  background.js
+  popup.html
+  popup.js
+  icons/
+
+dist-chrome/
+  manifest.json
+  content.js
+  background.js
+  popup.html
+  popup.js
+  icons/
+```
+
+These folders are **load‑ready** in their respective browsers.
+
+---
+
+## 🦊 **6.4 Firefox Build**
+
+Load via:
+
+```
+about:debugging → This Firefox → Load Temporary Add-on → dist-firefox/
+```
+
+Firefox uses:
+
+- `manifest.firefox.json` overrides  
+- `"background": { "type": "module" }`  
+- `"browser_specific_settings"`  
+
+---
+
+## 🟦 **6.5 Chrome/Edge Build**
+
+Load via:
+
+```
+chrome://extensions → Developer Mode → Load unpacked → dist-chrome/
+```
+
+Chrome/Edge use:
+
+- `manifest.chrome.json` overrides  
+- `"background": { "service_worker": "background.js" }`  
+
+---
+
+## 🔁 **6.6 How AI Tools Should Modify the Build System**
+
+To ensure safe modifications:
+
+### AI MUST:
+
+- Keep the `src/` → `dist-*` structure intact  
+- Preserve the manifest merge logic  
+- Preserve the file copy logic  
+- Keep the build script idempotent  
+- Keep browser‑specific manifests separate  
+
+### AI MUST NOT:
+
+- Inline manifest overrides into the base manifest  
+- Change output folder names  
+- Remove or rename `src/`  
+- Introduce bundlers unless explicitly requested  
+- Change the MV3 service worker structure  
+
+---
+
+# 7. 🌐 Browser Compatibility
+
+The extension supports:
+
+- Firefox (MV3)
+- Chrome (MV3)
+- Edge (MV3)
+
+Compatibility is achieved via:
+
+```js
+if (typeof browser === "undefined") var browser = chrome;
+```
+
+---
+
+# 8. 🧪 Testing Strategy
+
+### Test on DDB:
+
+- Character page (owned)
+- Character page (not owned)
+- Campaign page (DM)
+- Campaign page (player)
+- Campaign page (not a member)
+
+### Test server flows:
+
+- Valid serverCode
+- Invalid serverCode
+- Missing server
+- Multiple servers
+- Relaunch last session
+
+---
+
+# 9. 📌 Constraints & Rules for AI Tools
+
+To ensure safe and correct generation:
+
+### AI MUST:
+
+- Preserve the MV3 structure
+- Preserve the polyfill (`browser` vs `chrome`)
+- Preserve the `/api/connect` payload shape
+- Preserve the DDB API calls
+- Preserve the build scripts
+- Keep content/background scripts separate
+- Keep manifests separate
+
+### AI MUST NOT:
+
+- Inline code into manifest files
+- Change the onboarding flow
+- Remove the serverCode requirement
+- Modify the JWT handling
+- Add new permissions without explicit instruction
+- Change the URL matching patterns
+- Break cross‑browser compatibility
+
+---
+
+# 10. 📚 Future Extensions
+
+- TypeScript migration
+- Vite/ESBuild bundling
+- LiveKit token endpoint integration
+- Automatic server discovery
+- Character portrait sync
+- Campaign notes sync
+
+---
+
+If you'd like, I can also generate:
+
+- A **CONTRIBUTING.md**  
+- A **DEVELOPING.md** (for extension developers)  
+- A **SECURITY.md**  
+- A **CHANGELOG.md**  
+
+Just tell me what you want next.
