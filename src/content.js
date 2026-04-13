@@ -174,69 +174,66 @@ function injectLaunchButton(targetEl) {
   if (!targetEl) return;
   if (document.getElementById("vtt-launch-btn")) return;
 
-  const isCampaign = isCampaignPage();
-  const background = isCampaign ? "#2d5aa0" : "#c53131";
+  if (isCharacterPage()) {
 
-  const btn = document.createElement("button");
-  btn.id = "vtt-launch-btn";
-  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10zM8 12h2v2H8v-2zm4 0h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg> Chat`;
-  btn.title = "Launch VTT Chat";
-  btn.style.background = background;
-  btn.style.color = "#fff";
-  btn.style.padding = "6px 12px";
-  btn.style.border = "none";
-  btn.style.cursor = "pointer";
-  btn.style.marginRight = "8px";
-  btn.style.fontWeight = "600";
-  btn.style.display = "flex";
-  btn.style.alignItems = "center";
-  btn.style.gap = "4px";
+    // Find the existing Game Log button structure to copy classes
+    const existingDiv = targetEl.querySelector('div[role="button"][aria-roledescription="Game Log"]');
+    if (!existingDiv) return;
 
-  btn.addEventListener("click", onLaunchClick);
-  targetEl.appendChild(btn);
-}
+    const existingInnerDiv = existingDiv.querySelector('div');
+    if (!existingInnerDiv) return;
 
-function injectLaunchButtonCharacter(targetEl) {
-  if (!targetEl) return;
-  if (document.getElementById("vtt-launch-btn")) return;
+    // Create the tooltip span wrapper
+    const tooltipSpan = document.createElement("span");
+    tooltipSpan.className = "ddbc-tooltip ddbc-tooltip--dark-mode";
+    tooltipSpan.setAttribute("data-tippy", "");
+    tooltipSpan.setAttribute("data-original-title", "Launch VTT Chat");
 
-  // Find the existing Game Log button structure to copy classes
-  const existingDiv = targetEl.querySelector('div[role="button"][aria-roledescription="Game Log"]');
-  if (!existingDiv) return;
+    // Create the button div
+    const buttonDiv = document.createElement("div");
+    buttonDiv.id = "vtt-launch-btn";
+    buttonDiv.setAttribute("role", "button");
+    buttonDiv.setAttribute("aria-roledescription", "Launch VTT Chat");
+    buttonDiv.className = existingDiv.className; // Copy the classes
 
-  const existingInnerDiv = existingDiv.querySelector('div');
-  if (!existingInnerDiv) return;
+    // Create the inner content div
+    const innerDiv = document.createElement("div");
+    innerDiv.className = existingInnerDiv.className; // Copy the inner div classes
 
-  // Create the tooltip span wrapper
-  const tooltipSpan = document.createElement("span");
-  tooltipSpan.className = "ddbc-tooltip ddbc-tooltip--dark-mode";
-  tooltipSpan.setAttribute("data-tippy", "");
-  tooltipSpan.setAttribute("data-original-title", "Launch VTT Chat");
+    // Add the chat icon SVG
+    innerDiv.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10zM8 12h2v2H8v-2zm4 0h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg>`;
 
-  // Create the button div
-  const buttonDiv = document.createElement("div");
-  buttonDiv.id = "vtt-launch-btn";
-  buttonDiv.setAttribute("role", "button");
-  buttonDiv.setAttribute("aria-roledescription", "Launch VTT Chat");
-  buttonDiv.className = existingDiv.className; // Copy the classes
+    // Assemble the structure
+    buttonDiv.appendChild(innerDiv);
+    tooltipSpan.appendChild(buttonDiv);
 
-  // Create the inner content div
-  const innerDiv = document.createElement("div");
-  innerDiv.className = existingInnerDiv.className; // Copy the inner div classes
+    // Add click event
+    buttonDiv.addEventListener("click", onLaunchClick);
 
-  // Add the chat icon SVG
-  innerDiv.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10zM8 12h2v2H8v-2zm4 0h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg>`;
+    // Insert before the target element
+    if (targetEl.parentNode) {
+      targetEl.parentNode.insertBefore(tooltipSpan, targetEl);
+    }
+  } else if (isCampaignPage()) {
 
-  // Assemble the structure
-  buttonDiv.appendChild(innerDiv);
-  tooltipSpan.appendChild(buttonDiv);
+    const btn = document.createElement("button");
+    btn.id = "vtt-launch-btn";
+    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10zM8 12h2v2H8v-2zm4 0h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg> Chat`;
+    btn.title = "Launch VTT Chat";
+    btn.style.background = "#2d5aa0";
+    btn.style.color = "#fff";
+    btn.style.padding = "6px 12px";
+    btn.style.border = "none";
+    btn.style.cursor = "pointer";
+    btn.style.marginRight = "8px";
+    btn.style.fontWeight = "600";
+    btn.style.display = "flex";
+    btn.style.alignItems = "center";
+    btn.style.gap = "4px";
 
-  // Add click event
-  buttonDiv.addEventListener("click", onLaunchClick);
+    btn.addEventListener("click", onLaunchClick);
 
-  // Insert before the target element
-  if (targetEl.parentNode) {
-    targetEl.parentNode.insertBefore(tooltipSpan, targetEl);
+    targetEl.appendChild(btn);
   }
 }
 
@@ -244,11 +241,19 @@ function injectLaunchButtonCharacter(targetEl) {
 // 6. LAUNCH HANDLER
 //
 async function onLaunchClick() {
+  console.log("[VTT-Chat] Launch button clicked");
+
   const { ddbUser, ddbCharacterList } = await browser.storage.local.get([
     "ddbUser",
     "ddbCharacterList"
   ]);
-  if (!ddbUser) return;
+
+  if (!ddbUser) {
+    console.log("[VTT-Chat] No user data available");
+    return;
+  }
+
+  console.log("[VTT-Chat] Preparing payload for user:", ddbUser.displayName);
 
   const payload = {
     ddbUser,
@@ -260,8 +265,13 @@ async function onLaunchClick() {
 
   if (isCharacterPage()) {
     const charId = getCharacterIdFromUrl();
+    console.log("[VTT-Chat] Character page detected, character ID:", charId);
+
     const char = ddbCharacterList?.find(c => c.id === charId);
-    if (!char) return;
+    if (!char) {
+      console.log("[VTT-Chat] Character not found in list");
+      return;
+    }
 
     payload.ddbCampaignId = String(char.campaignId || "");
     payload.ddbCampaignName = char.campaignName || "Campaign";
@@ -274,12 +284,19 @@ async function onLaunchClick() {
       className: char.class,
       level: char.level
     };
+
+    console.log("[VTT-Chat] Character payload prepared:", payload.character.name);
   }
 
   if (isCampaignPage()) {
     const campaignId = getCampaignIdFromUrl();
+    console.log("[VTT-Chat] Campaign page detected, campaign ID:", campaignId);
+
     const details = await fetchCampaignDetails(campaignId);
-    if (!details) return;
+    if (!details) {
+      console.log("[VTT-Chat] Could not fetch campaign details");
+      return;
+    }
 
     payload.ddbCampaignId = String(details.id);
     payload.ddbCampaignName = details.name;
@@ -300,8 +317,11 @@ async function onLaunchClick() {
         };
       }
     }
+
+    console.log("[VTT-Chat] Campaign payload prepared, is DM:", payload.isDm);
   }
 
+  console.log("[VTT-Chat] Sending connect message to background");
   browser.runtime.sendMessage({ type: "connect", payload });
 }
 
@@ -317,9 +337,11 @@ async function ensureDdbCache() {
   ]);
 
   if (ddbUser && ddbCacheUpdatedAt && Date.now() - ddbCacheUpdatedAt < CACHE_TTL_MS) {
+    console.log("[VTT-Chat] Using cached user data");
     return;
   }
 
+  console.log("[VTT-Chat] Refreshing user cache");
   try {
     const user = extractDdbUser();
     if (!user) {
@@ -328,6 +350,7 @@ async function ensureDdbCache() {
         ddbCharacterList: null,
         ddbCacheUpdatedAt: Date.now()
       });
+      console.log("[VTT-Chat] No user found, cleared cache");
       return;
     }
 
@@ -339,8 +362,9 @@ async function ensureDdbCache() {
       ddbCharacterList: characterList,
       ddbCacheUpdatedAt: Date.now()
     });
+    console.log("[VTT-Chat] Cache updated with user and", characterList.length, "characters");
   } catch (e) {
-    console.warn("DDB Identity Inspector error:", e);
+    console.warn("[VTT-Chat] Cache error:", e);
   }
 }
 
@@ -355,7 +379,7 @@ async function ensureDdbCache() {
       if (!(await isOwnedCharacterPage())) return;
       const gameLogSpan = document.querySelector('span.ddbc-tooltip[data-original-title="Launch Game"]');
       if (gameLogSpan) {
-        setTimeout(() => injectLaunchButtonCharacter(gameLogSpan), 1000);
+        setTimeout(() => injectLaunchButton(gameLogSpan), 1000);
       }
     }
 
