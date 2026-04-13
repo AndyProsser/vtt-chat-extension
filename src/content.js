@@ -171,17 +171,32 @@ async function isOwnedCharacterPage() {
 // 5. BUTTON INJECTION
 //
 function injectLaunchButton(targetEl) {
-  if (!targetEl) return;
-  if (document.getElementById("vtt-launch-btn")) return;
+  if (!targetEl) {
+    console.log("[VTT-Chat] No target element provided");
+    return;
+  }
+  if (document.getElementById("vtt-launch-btn")) {
+    console.log("[VTT-Chat] Button already exists");
+    return;
+  }
 
   if (isCharacterPage()) {
+    console.log("[VTT-Chat] Injecting for character page");
 
     // Find the existing Game Log button structure to copy classes
-    const existingDiv = targetEl.querySelector('div[role="button"][aria-roledescription="Game Log"]');
-    if (!existingDiv) return;
+    const existingDiv = document.querySelector('div[role="button"][aria-roledescription="Game Log"]');
+    if (!existingDiv) {
+      console.log("[VTT-Chat] Could not find Game Log button structure");
+      return;
+    }
 
     const existingInnerDiv = existingDiv.querySelector('div');
-    if (!existingInnerDiv) return;
+    if (!existingInnerDiv) {
+      console.log("[VTT-Chat] Could not find inner div in Game Log button");
+      return;
+    }
+
+    console.log("[VTT-Chat] Found Game Log structure, copying classes:", existingDiv.className);
 
     // Create the tooltip span wrapper
     const tooltipSpan = document.createElement("span");
@@ -213,12 +228,16 @@ function injectLaunchButton(targetEl) {
     // Insert before the target element
     if (targetEl.parentNode) {
       targetEl.parentNode.insertBefore(tooltipSpan, targetEl);
+      console.log("[VTT-Chat] Character page button injected successfully");
+    } else {
+      console.log("[VTT-Chat] Could not find parent node for character page insertion");
     }
   } else if (isCampaignPage()) {
+    console.log("[VTT-Chat] Injecting for campaign page");
 
     const btn = document.createElement("button");
     btn.id = "vtt-launch-btn";
-    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10zM8 12h2v2H8v-2zm4 0h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg> Chat`;
+    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10zM8 12h2v2H8v-2zm4 0h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg> CHAT`;
     btn.title = "Launch VTT Chat";
     btn.style.background = "#2d5aa0";
     btn.style.color = "#fff";
@@ -234,6 +253,9 @@ function injectLaunchButton(targetEl) {
     btn.addEventListener("click", onLaunchClick);
 
     targetEl.appendChild(btn);
+    console.log("[VTT-Chat] Campaign page button injected successfully");
+  } else {
+    console.log("[VTT-Chat] Unknown page type, no injection performed");
   }
 }
 
