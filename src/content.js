@@ -3,6 +3,8 @@ if (typeof browser === "undefined") {
   var browser = chrome;
 }
 
+console.log("[VTT-Chat] Content script loaded");
+
 //
 // 1. USER EXTRACTORS (your POC)
 //
@@ -105,7 +107,7 @@ async function fetchCharacterList(userId) {
   const headers = await buildAuthHeaders();
   if (!headers.Authorization) return null;
   const url = `https://character-service.dndbeyond.com/character/v5/characters/list?userId=${userId}`;
-  const res = await fetch(url, { method: "GET", credentials: "include", headers });
+  const res = await fetch(url, { method: "GET", headers });
   if (!res.ok) return null;
   const data = await res.json();
   return data.data;
@@ -133,7 +135,7 @@ async function fetchCampaignDetails(campaignId) {
   if (!headers.Authorization) return null;
 
   const url = `https://api.dndbeyond.com/campaigns/v1/details/${campaignId}`;
-  const res = await fetch(url, { method: "GET", credentials: "include", headers });
+  const res = await fetch(url, { method: "GET", headers });
   if (!res.ok) return null;
 
   const data = await res.json();
@@ -172,20 +174,70 @@ function injectLaunchButton(targetEl) {
   if (!targetEl) return;
   if (document.getElementById("vtt-launch-btn")) return;
 
+  const isCampaign = isCampaignPage();
+  const background = isCampaign ? "#2d5aa0" : "#c53131";
+
   const btn = document.createElement("button");
   btn.id = "vtt-launch-btn";
-  btn.textContent = "Launch VTT‑Chat";
-  btn.style.background = "#c53131";
+  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10zM8 12h2v2H8v-2zm4 0h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg> Chat`;
+  btn.title = "Launch VTT Chat";
+  btn.style.background = background;
   btn.style.color = "#fff";
   btn.style.padding = "6px 12px";
-  btn.style.borderRadius = "6px";
   btn.style.border = "none";
   btn.style.cursor = "pointer";
-  btn.style.marginLeft = "8px";
+  btn.style.marginRight = "8px";
   btn.style.fontWeight = "600";
+  btn.style.display = "flex";
+  btn.style.alignItems = "center";
+  btn.style.gap = "4px";
 
   btn.addEventListener("click", onLaunchClick);
   targetEl.appendChild(btn);
+}
+
+function injectLaunchButtonCharacter(targetEl) {
+  if (!targetEl) return;
+  if (document.getElementById("vtt-launch-btn")) return;
+
+  // Find the existing Game Log button structure to copy classes
+  const existingDiv = targetEl.querySelector('div[role="button"][aria-roledescription="Game Log"]');
+  if (!existingDiv) return;
+
+  const existingInnerDiv = existingDiv.querySelector('div');
+  if (!existingInnerDiv) return;
+
+  // Create the tooltip span wrapper
+  const tooltipSpan = document.createElement("span");
+  tooltipSpan.className = "ddbc-tooltip ddbc-tooltip--dark-mode";
+  tooltipSpan.setAttribute("data-tippy", "");
+  tooltipSpan.setAttribute("data-original-title", "Launch VTT Chat");
+
+  // Create the button div
+  const buttonDiv = document.createElement("div");
+  buttonDiv.id = "vtt-launch-btn";
+  buttonDiv.setAttribute("role", "button");
+  buttonDiv.setAttribute("aria-roledescription", "Launch VTT Chat");
+  buttonDiv.className = existingDiv.className; // Copy the classes
+
+  // Create the inner content div
+  const innerDiv = document.createElement("div");
+  innerDiv.className = existingInnerDiv.className; // Copy the inner div classes
+
+  // Add the chat icon SVG
+  innerDiv.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10zM8 12h2v2H8v-2zm4 0h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg>`;
+
+  // Assemble the structure
+  buttonDiv.appendChild(innerDiv);
+  tooltipSpan.appendChild(buttonDiv);
+
+  // Add click event
+  buttonDiv.addEventListener("click", onLaunchClick);
+
+  // Insert before the target element
+  if (targetEl.parentNode) {
+    targetEl.parentNode.insertBefore(tooltipSpan, targetEl);
+  }
 }
 
 //
@@ -301,16 +353,16 @@ async function ensureDdbCache() {
 
     if (isCharacterPage()) {
       if (!(await isOwnedCharacterPage())) return;
-      const header =
-        document.querySelector('[data-testid="character-header"]') ||
-        document.querySelector("h1");
-      injectLaunchButton(header);
+      const gameLogSpan = document.querySelector('span.ddbc-tooltip[data-original-title="Launch Game"]');
+      if (gameLogSpan) {
+        setTimeout(() => injectLaunchButtonCharacter(gameLogSpan), 1000);
+      }
     }
 
     if (isCampaignPage()) {
       const header =
-        document.querySelector(".ddb-campaigns-detail-header") ||
-        document.querySelector("h1");
+        document.querySelector('div.ddb-campaigns-detail-gamespace') ||
+        document.querySelector("header.page-header");
       injectLaunchButton(header);
     }
   });

@@ -9,17 +9,18 @@
   },
   "permissions": [
     "storage",
-    "tabs"
+    "cookies"
   ],
   "host_permissions": [
-    "https://www.dndbeyond.com/*",
-    "https://*.dndbeyond.com/*",
+    "https://www.dndbeyond.com/*",    
+    "https://character-service.dndbeyond.com/*",
     "https://api.dndbeyond.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
-      "48": "icons/icon-48.png"
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
     }
   },
   "background": {
