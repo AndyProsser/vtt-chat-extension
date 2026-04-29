@@ -9,11 +9,26 @@
         font-family: system-ui, sans-serif;
         font-size: 13px;
         margin: 10px;
-        min-width: 260px;
+        min-width: 320px;
       }
       .section { margin-bottom: 12px; }
       .server { display: flex; align-items: center; margin-bottom: 4px; }
       .server input[type="radio"] { margin-right: 6px; }
+      label {
+        display: block;
+        margin-bottom: 6px;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 8px;
+        border: 1px solid #b8b8b8;
+        border-radius: 4px;
+      }
+      .grid {
+        display: grid;
+        gap: 8px;
+      }
       button {
         background: #c53131;
         color: #fff;
@@ -24,6 +39,28 @@
         font-weight: 600;
       }
       button.secondary { background: #444; }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .muted {
+        color: #555;
+      }
+      .status {
+        border: 1px solid #d3d3d3;
+        border-radius: 4px;
+        padding: 8px;
+        background: #f7f7f7;
+      }
+      .error {
+        border-color: #cf4a4a;
+        background: #fff0f0;
+        color: #9f2121;
+      }
+      .ok {
+        border-color: #5b9d65;
+        background: #effaf1;
+      }
     </style>
   </head>
   <body>
@@ -35,6 +72,57 @@
 
     <div class="section">
       <button id="relaunch" class="secondary">Reopen Last Session</button>
+    </div>
+
+    <div class="section">
+      <strong>Stage 13.4 Pre-flight</strong>
+      <div class="grid" style="margin-top: 8px;">
+        <label>
+          Invite code
+          <input id="invite-code" type="text" placeholder="Player invite code" />
+        </label>
+        <label>
+          Email
+          <input id="email" type="email" placeholder="you@example.com" />
+        </label>
+        <label>
+          External user ID
+          <input id="external-user-id" type="text" placeholder="D&D Beyond user id" />
+        </label>
+      </div>
+      <button id="run-preflight" style="margin-top: 8px;">Run Pre-flight</button>
+      <div id="preflight-status" class="status muted" style="margin-top: 8px;">
+        Run pre-flight to check platform status and invite validity.
+      </div>
+    </div>
+
+    <div class="section" id="guest-login-section" style="display: none;">
+      <strong>Guest Join</strong>
+      <p class="muted">Joins with guest auth and stores a renewable token in extension memory.</p>
+      <button id="guest-login">Continue As Guest</button>
+    </div>
+
+    <div class="section" id="full-login-section" style="display: none;">
+      <strong>Full Account Login</strong>
+      <p class="muted">This branch is shown when pre-flight reports an existing full account.</p>
+      <div class="grid">
+        <label>
+          Email
+          <input id="login-email" type="email" readonly />
+        </label>
+        <label>
+          Password
+          <input id="login-password" type="password" placeholder="Enter password" />
+        </label>
+      </div>
+      <button id="full-login" style="margin-top: 8px;">Log In</button>
+    </div>
+
+    <div class="section">
+      <strong>Auth State</strong>
+      <div id="auth-state" class="status muted" style="margin-top: 8px;">
+        No in-memory token
+      </div>
     </div>
 
     <script src="popup.js"></script>

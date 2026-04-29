@@ -17,6 +17,7 @@ function extractFromMegaMenu() {
     id: Number(userId),
     displayName: el.getAttribute("display-name") || null,
     avatarUrl: el.getAttribute("user-avatar") || null,
+    email: el.getAttribute("email") || null,
     roles: (el.getAttribute("roles") || "").split(",").map(r => r.trim())
   };
 }
@@ -27,6 +28,7 @@ function extractFromCobalt() {
       id: Number(window.Cobalt.User.ID),
       displayName: window.Cobalt.User.DisplayName || null,
       avatarUrl: window.Cobalt.User.AvatarUrl || null,
+      email: window.Cobalt.User.Email || null,
       roles: []
     };
   }
@@ -65,6 +67,7 @@ function extractFromNextFlight() {
       id: Number(raw.id),
       displayName: raw.displayName || raw.name || null,
       avatarUrl: raw.avatarUrl || null,
+      email: raw.email || null,
       roles: Array.isArray(raw.roles) ? raw.roles : []
     };
   } catch {
@@ -124,6 +127,54 @@ function normalizeCharacterList(raw) {
     avatar: c.avatarUrl,
     campaignId: c.campaignId,
     campaignName: c.campaignName
+  }));
+}
+
+function sendCharacterSyncUpdate(update) {
+  try {
+    browser.runtime.sendMessage({ type: "character-update-detected", payload: update });
+  } catch {
+    // Ignore background availability issues.
+  }
+}
+
+function emitCharacterDiffs(previousList, nextList, ddbUserId) {
+  if (!Array.isArray(previousList) || !Array.isArray(nextList)) {
+    return;
+  }
+
+  const prevMap = new Map(previousList.map(c => [String(c.id), c]));
+  for (const nextChar of nextList) {
+    const prevChar = prevMap.get(String(nextChar.id));
+    if (!prevChar) continue;
+
+    const levelChanged = Number(prevChar.level || 0) !== Number(nextChar.level || 0);
+    const classChanged = String(prevChar.class || "") !== String(nextChar.class || "");
+    if (!levelChanged && !classChanged) continue;
+
+    sendCharacterSyncUpdate({
+      source: "player",
+      externalUserId: String(ddbUserId || ""),
+      externalCharacterId: String(nextChar.id),
+      level: typeof nextChar.level === "number" ? nextChar.level : null,
+      className: nextChar.class || null
+    });
+  }
+}
+
+function normalizeCampaignMembers(details) {
+  const members = Array.isArray(details?.activeCharacters) ? details.activeCharacters : [];
+  return members.map(member => ({
+    externalUserId: String(member.userId || ""),
+    displayName: member.userName || member.displayName || null,
+    avatarUrl: member.avatarUrl || null,
+    character: {
+      externalCharacterId: String(member.id || ""),
+      name: member.name || null,
+      class: member.class || null,
+      level: typeof member.level === "number" ? member.level : null,
+      avatarUrl: member.avatarUrl || null
+    }
   }));
 }
 
@@ -285,6 +336,13 @@ async function onLaunchClick() {
     character: null
   };
 
+  const activeContext = {
+    externalCampaignId: null,
+    campaignName: null,
+    dmExternalUserId: null,
+    members: []
+  };
+
   if (isCharacterPage()) {
     const charId = getCharacterIdFromUrl();
     console.log("[VTT-Chat] Character page detected, character ID:", charId);
@@ -307,6 +365,9 @@ async function onLaunchClick() {
       level: char.level
     };
 
+    activeContext.externalCampaignId = payload.ddbCampaignId;
+    activeContext.campaignName = payload.ddbCampaignName;
+
     console.log("[VTT-Chat] Character payload prepared:", payload.character.name);
   }
 
@@ -323,6 +384,11 @@ async function onLaunchClick() {
     payload.ddbCampaignId = String(details.id);
     payload.ddbCampaignName = details.name;
     payload.isDm = Number(details.dmId) === Number(ddbUser.id);
+
+    activeContext.externalCampaignId = String(details.id || "");
+    activeContext.campaignName = details.name || null;
+    activeContext.dmExternalUserId = String(details.dmId || "");
+    activeContext.members = normalizeCampaignMembers(details);
 
     if (!payload.isDm) {
       const userChar = details.activeCharacters?.find(
@@ -343,6 +409,10 @@ async function onLaunchClick() {
     console.log("[VTT-Chat] Campaign payload prepared, is DM:", payload.isDm);
   }
 
+  await browser.storage.local.set({
+    ddbActiveContext: activeContext
+  });
+
   console.log("[VTT-Chat] Sending connect message to background");
   browser.runtime.sendMessage({ type: "connect", payload });
 }
@@ -353,8 +423,9 @@ async function onLaunchClick() {
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 async function ensureDdbCache() {
-  const { ddbUser, ddbCacheUpdatedAt } = await browser.storage.local.get([
+  const { ddbUser, ddbCharacterList, ddbCacheUpdatedAt } = await browser.storage.local.get([
     "ddbUser",
+    "ddbCharacterList",
     "ddbCacheUpdatedAt"
   ]);
 
@@ -378,6 +449,8 @@ async function ensureDdbCache() {
 
     const rawList = await fetchCharacterList(user.id);
     const characterList = normalizeCharacterList(rawList);
+
+    emitCharacterDiffs(ddbCharacterList, characterList, user.id);
 
     await browser.storage.local.set({
       ddbUser: user,

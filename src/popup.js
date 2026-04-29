@@ -15,6 +15,15 @@ async function saveState(partial) {
   await browser.storage.local.set(partial);
 }
 
+function byId(id) {
+  return document.getElementById(id);
+}
+
+function setStatus(el, text, kind) {
+  el.textContent = text;
+  el.className = `status ${kind || "muted"}`;
+}
+
 function renderServers(servers, activeServerId) {
   const container = document.getElementById("servers");
   container.innerHTML = "";
@@ -41,13 +50,52 @@ function renderServers(servers, activeServerId) {
 }
 
 async function initPopup() {
-  const { servers, activeServerId, lastSession } = await getState();
+  const { servers, activeServerId, lastSession, ddbUser } = await getState();
   renderServers(servers, activeServerId);
+
+  const inviteCodeInput = byId("invite-code");
+  const emailInput = byId("email");
+  const externalUserIdInput = byId("external-user-id");
+  const runPreflightButton = byId("run-preflight");
+  const preflightStatus = byId("preflight-status");
+  const guestLoginSection = byId("guest-login-section");
+  const guestLoginButton = byId("guest-login");
+  const fullLoginSection = byId("full-login-section");
+  const fullLoginButton = byId("full-login");
+  const loginEmailInput = byId("login-email");
+  const loginPasswordInput = byId("login-password");
+  const authStateBox = byId("auth-state");
+
+  emailInput.value = ddbUser?.email || "";
+  externalUserIdInput.value = ddbUser?.id ? String(ddbUser.id) : "";
+  loginEmailInput.value = ddbUser?.email || "";
+
+  const syncAuthState = async () => {
+    const state = await browser.runtime.sendMessage({ type: "get-auth-state" });
+    if (!state?.ok || !state.hasAuthToken) {
+      setStatus(authStateBox, "No in-memory token", "muted");
+      return;
+    }
+
+    const expiry = state.tokenExpiresAt
+      ? new Date(state.tokenExpiresAt).toLocaleString()
+      : "unknown";
+    setStatus(
+      authStateBox,
+      `${state.authType || "UNKNOWN"} token in memory. Expires: ${expiry}`,
+      "ok"
+    );
+  };
+
+  const hideAuthBranches = () => {
+    guestLoginSection.style.display = "none";
+    fullLoginSection.style.display = "none";
+  };
 
   // -----------------------------
   // Add Server
   // -----------------------------
-  document.getElementById("add-server").addEventListener("click", async () => {
+  byId("add-server").addEventListener("click", async () => {
     const name = prompt("Server name:");
     if (!name) return;
 
@@ -66,7 +114,7 @@ async function initPopup() {
   // -----------------------------
   // Relaunch Last Session
   // -----------------------------
-  const relaunchBtn = document.getElementById("relaunch");
+  const relaunchBtn = byId("relaunch");
 
   const canRelaunch =
     lastSession &&
@@ -88,9 +136,88 @@ async function initPopup() {
       url: `${server.url.replace(
         /\/$/,
         ""
-      )}/sessions/${lastSession.sessionId}?token=${encodeURIComponent(lastSession.token)}`
+      )}/join/${encodeURIComponent(lastSession.inviteCode || server.serverCode || "")}`
     });
   });
+
+  runPreflightButton.addEventListener("click", async () => {
+    hideAuthBranches();
+    setStatus(preflightStatus, "Running pre-flight...", "muted");
+
+    const payload = {
+      inviteCode: inviteCodeInput.value.trim(),
+      email: emailInput.value.trim(),
+      externalUserId: externalUserIdInput.value.trim()
+    };
+
+    const result = await browser.runtime.sendMessage({ type: "run-preflight", payload });
+
+    if (!result?.ok) {
+      const message = result?.error || "Pre-flight failed";
+      setStatus(preflightStatus, message, "error");
+      if (result?.code === "INTEGRATION_NOT_AUTHORIZED") {
+        setStatus(
+          preflightStatus,
+          `Platform not enabled: ${message}`,
+          "error"
+        );
+      }
+      return;
+    }
+
+    const suggestedFlow = result.preflight?.suggestedFlow || "unknown";
+    const accountStatus = result.preflight?.accountStatus || "unknown";
+    const campaignName = result.invite?.campaign?.name || "Unknown campaign";
+    setStatus(
+      preflightStatus,
+      `Online. Invite valid for ${campaignName}. accountStatus=${accountStatus}, suggestedFlow=${suggestedFlow}`,
+      "ok"
+    );
+
+    if (suggestedFlow === "guest" || suggestedFlow === "auto-login") {
+      guestLoginSection.style.display = "block";
+    } else if (suggestedFlow === "authenticate") {
+      fullLoginSection.style.display = "block";
+      loginEmailInput.value = emailInput.value.trim();
+    }
+  });
+
+  guestLoginButton.addEventListener("click", async () => {
+    setStatus(preflightStatus, "Running guest login...", "muted");
+    const payload = {
+      inviteCode: inviteCodeInput.value.trim(),
+      email: emailInput.value.trim(),
+      externalUserId: externalUserIdInput.value.trim()
+    };
+    const result = await browser.runtime.sendMessage({ type: "guest-login", payload });
+    if (!result?.ok) {
+      setStatus(preflightStatus, result?.error || "Guest login failed", "error");
+      return;
+    }
+
+    setStatus(preflightStatus, "Guest login succeeded. Token is stored in extension memory.", "ok");
+    await syncAuthState();
+  });
+
+  fullLoginButton.addEventListener("click", async () => {
+    setStatus(preflightStatus, "Running full-account login...", "muted");
+    const payload = {
+      email: loginEmailInput.value.trim(),
+      password: loginPasswordInput.value,
+      role: "PLAYER"
+    };
+
+    const result = await browser.runtime.sendMessage({ type: "full-login", payload });
+    if (!result?.ok) {
+      setStatus(preflightStatus, result?.error || "Full login failed", "error");
+      return;
+    }
+
+    setStatus(preflightStatus, "Full-account login succeeded. Token is stored in extension memory.", "ok");
+    await syncAuthState();
+  });
+
+  await syncAuthState();
 }
 
 initPopup();
