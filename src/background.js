@@ -3,7 +3,6 @@ if (typeof browser === "undefined") {
   var browser = chrome;
 }
 
-const RELAUNCH_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 const TOKEN_RENEWAL_WINDOW_MS = 15 * 60 * 1000;
 const EXTERNAL_SYSTEM = "dndbeyond";
 
@@ -131,6 +130,10 @@ function buildPopupContext(state, payload) {
 }
 
 function buildCampaignPacket(payload, ddbActiveContext) {
+  if (payload.campaignPacket && typeof payload.campaignPacket === "object") {
+    return payload.campaignPacket;
+  }
+
   const externalCampaignId = String(payload.externalCampaignId || ddbActiveContext?.externalCampaignId || "").trim();
   const dmExternalUserId = String(payload.dmExternalUserId || ddbActiveContext?.dmExternalUserId || "").trim();
   const campaignName = payload.campaignName || ddbActiveContext?.campaignName || undefined;
@@ -155,6 +158,7 @@ async function runPreflightSequence(server, context, currentToken) {
       ok: false,
       stage: "platform",
       platformStatus: null,
+      code: platform.json.code || null,
       error: platform.json.message || "Failed to reach platform"
     };
   }
@@ -179,6 +183,7 @@ async function runPreflightSequence(server, context, currentToken) {
       stage: "invite",
       platformStatus: platform.json,
       invite: invite.json,
+      code: invite.json.code || null,
       error: invite.json.message || invite.json.reason || "Invite is invalid or expired"
     };
   }
@@ -205,6 +210,7 @@ async function runPreflightSequence(server, context, currentToken) {
       stage: "preflight",
       platformStatus: platform.json,
       invite: invite.json,
+      code: preflight.json.code || null,
       error: preflight.json.message || "Preflight failed"
     };
   }
@@ -289,6 +295,24 @@ async function runGuestLoginForPopup(payload) {
     ? state.ddbCharacterList.find(c => String(c.id) === String(payload.externalCharacterId || "")) || null
     : null;
 
+  const payloadCharacter = payload.character && typeof payload.character === "object"
+    ? {
+        externalCharacterId: String(
+          payload.character.externalCharacterId || payload.character.ddbCharacterId || ""
+        ).trim(),
+        name: payload.character.name || undefined,
+        race: payload.character.race || undefined,
+        class: payload.character.class || payload.character.className || undefined,
+        subclass: payload.character.subclass || undefined,
+        level:
+          typeof payload.character.level === "number"
+            ? payload.character.level
+            : undefined,
+        avatarUrl: payload.character.avatarUrl || undefined,
+        characterUrl: payload.character.characterUrl || undefined
+      }
+    : null;
+
   const guestPayload = {
     inviteCode: context.inviteCode,
     externalSystem: EXTERNAL_SYSTEM,
@@ -296,7 +320,9 @@ async function runGuestLoginForPopup(payload) {
     email: context.email,
     displayName: context.displayName || undefined,
     avatarUrl: context.avatarUrl || undefined,
-    character: selectedCharacter
+    character: payloadCharacter && payloadCharacter.externalCharacterId
+      ? payloadCharacter
+      : selectedCharacter
       ? {
           externalCharacterId: String(selectedCharacter.id),
           name: selectedCharacter.name,
@@ -334,6 +360,7 @@ async function runGuestLoginForPopup(payload) {
       serverId: server.id,
       token: login.json.token,
       campaignId: login.json.user?.campaignId || null,
+      inviteCode: context.inviteCode,
       role: login.json.user?.role || null,
       connectedAt: Date.now(),
       authType: login.json.user?.authType || "GUEST"
@@ -367,7 +394,14 @@ async function runFullLoginForPopup(payload) {
   const login = await apiJson(server, "/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: email, role })
+    body: JSON.stringify({
+      username: email,
+      email,
+      password,
+      role,
+      displayName: payload.displayName || undefined,
+      avatarUrl: payload.avatarUrl || undefined
+    })
   });
 
   if (!login.response.ok) {
@@ -394,6 +428,7 @@ async function runFullLoginForPopup(payload) {
       serverId: server.id,
       token: login.json.token,
       campaignId: null,
+      inviteCode: String(payload.inviteCode || "").trim() || null,
       role: login.json.user?.role || null,
       connectedAt: Date.now(),
       authType: "FULL"
@@ -479,32 +514,36 @@ async function handleConnect(payload) {
   }
 
   const flow = preflightResult.preflight.suggestedFlow;
+  if (flow === "already-authenticated") {
+    browser.tabs.create({
+      url: `${baseServerUrl(server.url)}/join/${encodeURIComponent(context.inviteCode)}`
+    });
+    return;
+  }
+
   if (flow !== "guest" && flow !== "auto-login") {
     return;
   }
 
-  await runGuestLoginForPopup({
+  const guestLoginResult = await runGuestLoginForPopup({
     inviteCode: context.inviteCode,
     email: context.email,
     externalUserId: context.externalUserId,
     displayName: context.displayName,
-    avatarUrl: context.avatarUrl
+    avatarUrl: context.avatarUrl,
+    externalCharacterId: payload?.character?.ddbCharacterId || payload?.character?.externalCharacterId || null,
+    character: payload?.character || null,
+    externalCampaignId: payload?.ddbCampaignId || payload?.externalCampaignId || "",
+    campaignName: payload?.ddbCampaignName || payload?.campaignName || "",
+    dmExternalUserId: payload?.dmExternalUserId || ""
   });
+
+  if (!guestLoginResult?.ok) {
+    return;
+  }
 
   browser.tabs.create({
     url: `${baseServerUrl(server.url)}/join/${encodeURIComponent(context.inviteCode)}`
   });
 }
 
-export async function relaunchLastSession() {
-  const { servers, lastSession } = await getState();
-  if (!lastSession) return;
-  if (Date.now() - lastSession.connectedAt > RELAUNCH_MAX_AGE_MS) return;
-
-  const server = servers.find(s => s.id === lastSession.serverId);
-  if (!server) return;
-
-  browser.tabs.create({
-    url: `${baseServerUrl(server.url)}/join/${encodeURIComponent(lastSession.inviteCode || server.serverCode || "")}`
-  });
-}

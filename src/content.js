@@ -178,6 +178,16 @@ function normalizeCampaignMembers(details) {
   }));
 }
 
+function buildCampaignPacket(details) {
+  if (!details) return null;
+  return {
+    externalCampaignId: String(details.id || ""),
+    campaignName: details.name || null,
+    dmExternalUserId: String(details.dmId || ""),
+    members: normalizeCampaignMembers(details)
+  };
+}
+
 //
 // 3. CAMPAIGN API SUPPORT
 //
@@ -332,8 +342,10 @@ async function onLaunchClick() {
     ddbUser,
     ddbCampaignId: null,
     ddbCampaignName: null,
+    dmExternalUserId: null,
     isDm: false,
-    character: null
+    character: null,
+    campaignPacket: null
   };
 
   const activeContext = {
@@ -368,6 +380,16 @@ async function onLaunchClick() {
     activeContext.externalCampaignId = payload.ddbCampaignId;
     activeContext.campaignName = payload.ddbCampaignName;
 
+    if (char.campaignId) {
+      const details = await fetchCampaignDetails(char.campaignId);
+      if (details) {
+        payload.dmExternalUserId = String(details.dmId || "");
+        payload.campaignPacket = buildCampaignPacket(details);
+        activeContext.dmExternalUserId = String(details.dmId || "");
+        activeContext.members = normalizeCampaignMembers(details);
+      }
+    }
+
     console.log("[VTT-Chat] Character payload prepared:", payload.character.name);
   }
 
@@ -389,6 +411,8 @@ async function onLaunchClick() {
     activeContext.campaignName = details.name || null;
     activeContext.dmExternalUserId = String(details.dmId || "");
     activeContext.members = normalizeCampaignMembers(details);
+    payload.dmExternalUserId = activeContext.dmExternalUserId;
+    payload.campaignPacket = buildCampaignPacket(details);
 
     if (!payload.isDm) {
       const userChar = details.activeCharacters?.find(

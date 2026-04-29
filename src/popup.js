@@ -6,9 +6,20 @@ if (typeof browser === "undefined") {
 const RELAUNCH_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 
 async function getState() {
-  const { servers = [], activeServerId = null, lastSession = null } =
-    await browser.storage.local.get(["servers", "activeServerId", "lastSession"]);
-  return { servers, activeServerId, lastSession };
+  const {
+    servers = [],
+    activeServerId = null,
+    lastSession = null,
+    lastPreflight = null,
+    ddbUser = null
+  } = await browser.storage.local.get([
+    "servers",
+    "activeServerId",
+    "lastSession",
+    "lastPreflight",
+    "ddbUser"
+  ]);
+  return { servers, activeServerId, lastSession, lastPreflight, ddbUser };
 }
 
 async function saveState(partial) {
@@ -50,7 +61,7 @@ function renderServers(servers, activeServerId) {
 }
 
 async function initPopup() {
-  const { servers, activeServerId, lastSession, ddbUser } = await getState();
+  const { servers, activeServerId, lastSession, lastPreflight, ddbUser } = await getState();
   renderServers(servers, activeServerId);
 
   const inviteCodeInput = byId("invite-code");
@@ -91,6 +102,12 @@ async function initPopup() {
     guestLoginSection.style.display = "none";
     fullLoginSection.style.display = "none";
   };
+
+  if (lastPreflight?.checkedAt) {
+    const checkedAt = new Date(lastPreflight.checkedAt).toLocaleString();
+    const status = lastPreflight.ok ? "Previous pre-flight succeeded" : "Previous pre-flight failed";
+    setStatus(preflightStatus, `${status} at ${checkedAt}.`, lastPreflight.ok ? "ok" : "error");
+  }
 
   // -----------------------------
   // Add Server
@@ -154,14 +171,15 @@ async function initPopup() {
 
     if (!result?.ok) {
       const message = result?.error || "Pre-flight failed";
-      setStatus(preflightStatus, message, "error");
       if (result?.code === "INTEGRATION_NOT_AUTHORIZED") {
         setStatus(
           preflightStatus,
           `Platform not enabled: ${message}`,
           "error"
         );
+        return;
       }
+      setStatus(preflightStatus, message, "error");
       return;
     }
 
@@ -187,11 +205,17 @@ async function initPopup() {
     const payload = {
       inviteCode: inviteCodeInput.value.trim(),
       email: emailInput.value.trim(),
-      externalUserId: externalUserIdInput.value.trim()
+      externalUserId: externalUserIdInput.value.trim(),
+      externalCharacterId: null
     };
     const result = await browser.runtime.sendMessage({ type: "guest-login", payload });
     if (!result?.ok) {
-      setStatus(preflightStatus, result?.error || "Guest login failed", "error");
+      const message = result?.error || "Guest login failed";
+      if (result?.code === "INTEGRATION_NOT_AUTHORIZED") {
+        setStatus(preflightStatus, `Platform not enabled: ${message}`, "error");
+      } else {
+        setStatus(preflightStatus, message, "error");
+      }
       return;
     }
 
@@ -204,12 +228,18 @@ async function initPopup() {
     const payload = {
       email: loginEmailInput.value.trim(),
       password: loginPasswordInput.value,
+      inviteCode: inviteCodeInput.value.trim(),
       role: "PLAYER"
     };
 
     const result = await browser.runtime.sendMessage({ type: "full-login", payload });
     if (!result?.ok) {
-      setStatus(preflightStatus, result?.error || "Full login failed", "error");
+      const message = result?.error || "Full login failed";
+      if (result?.code === "INTEGRATION_NOT_AUTHORIZED") {
+        setStatus(preflightStatus, `Platform not enabled: ${message}`, "error");
+      } else {
+        setStatus(preflightStatus, message, "error");
+      }
       return;
     }
 

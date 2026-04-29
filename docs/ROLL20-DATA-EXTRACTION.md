@@ -1,4 +1,4 @@
-# ROLL20 EXTENSION-INTEGRATION.md
+# ROLL20 Data Extraction (DC1)
 
 ## Character Sheet
 
@@ -112,18 +112,27 @@ Auth: Bearer Token (window.hydra_access_token)
       "firebaseCharacter": {
         "char-attribs": {
           ...
-          }
-        },
-        "character": {
-          "avatar": "",
-          "id": "-OqFB2oDtvtbvu9ox-Ag",
-          "name": "Vaelthar",
-          "tags": "[]",
-          "vault_character_id": 17043231
         }
       },
-      "playerPlanName": "free"
-    }
+      "character": {
+        "avatar": "",
+        "id": "-OqFB2oDtvtbvu9ox-Ag",
+        "name": "Vaelthar",
+        "tags": "[]",
+        "vault_character_id": 17043231
+      }
+    },
+    "playerPlanName": "free"
   }
 }
 ```
+
+---
+
+---
+
+For D&D Beyond data extraction, see [DDB-DATA-EXTRACTION.md](./DDB-DATA-EXTRACTION.md).
+
+For integration and onboarding flow, see [INTEGRATION.md](./INTEGRATION.md).
+
+---

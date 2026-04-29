@@ -1,3 +1,22 @@
+# 🛣️ Roadmap & Multi-VTT Improvements
+
+This extension is evolving from a D&D Beyond-specific connector to a universal VTT onboarding tool. The following improvements and roadmap items reflect this broader scope:
+
+## Roadmap
+
+- [x] **D&D Beyond support** — Full integration (character/campaign detection, onboarding, sync)
+- [ ] **Roll20 support** — Detect logged-in user, extract character/campaign, inject button, onboarding flow (in progress)
+- [ ] **Foundry VTT support** — Detect logged-in user, extract character/game, inject button, onboarding flow (planned)
+- [ ] **Other VTTs** — Community-driven support for additional platforms (planned)
+
+- [ ] **Chat log integration** — For Roll20, extract chat log and send to VTT‑Chat
+- [ ] **Session persistence** — Improve last-session restore across VTTs
+- [ ] **UI polish** — Popup and in-page button styling
+- [ ] **Error handling** — More granular error codes and user feedback
+- [ ] **Test coverage** — Expand contract and integration tests for all VTTs
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for technical details and VTT-specific integration notes. See [../README.md](../README.md) for project overview and roadmap.
+
 # Code Quality & DevOps Improvements
 
 This document outlines the improvements made to the VTT-Chat DDB Connector extension and recommends further enhancements.

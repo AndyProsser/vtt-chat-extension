@@ -1,5 +1,5 @@
 {
-  "name": "vtt-chat-ddb-connector",
+  "name": "vtt-chat-extension",
   "version": "0.1.0",
   "description": "Browser extension to launch VTT-Chat sessions from D&D Beyond",
   "type": "module",
@@ -8,6 +8,7 @@
     "build": "node build.js",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
+    "test": "node --test tests/**/*.test.js",
     "clean": "rm -rf dist-*",
     "package": "npm run build && npm run package:firefox && npm run package:chrome",
     "package:firefox": "cd dist-firefox && zip -r ../vtt-chat-ddb-connector-firefox.zip .",

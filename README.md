@@ -1,16 +1,24 @@
-# VTT‑Chat D&D Beyond Connector (Browser Extension)
 
-A cross‑browser extension (Firefox, Chrome, Edge) that lets DMs and players
-launch a VTT‑Chat session directly from D&D Beyond character and campaign pages.
+# VTT‑Chat Universal VTT Connector (Browser Extension)
+
+A cross‑browser extension (Firefox, Chrome, Edge) that lets DMs and players launch a VTT‑Chat session directly from supported Virtual Tabletops (VTTs).
+
+**Supported VTTs:**
+- D&D Beyond (full integration)
+
+**Planned/Upcoming:**
+- Roll20 (in progress)
+- Foundry VTT (planned)
+- Additional web-based tabletops (planned)
 
 This extension:
 
-- Detects logged‑in DDB users
-- Fetches character lists and campaign details using real DDB auth tokens
-- Determines DM vs player from the campaign API
+- Detects logged‑in users on supported VTTs
+- Fetches character lists and campaign/campaign details using real platform tokens
+- Determines DM vs player from the VTT API or page context
 - Injects a "Launch VTT‑Chat" button into:
-  - Character pages you own
-  - Campaign pages you are a member of
+  - Character sheets you own
+  - Campaign/game pages you are a member of
 - Sends a unified onboarding payload to your VTT‑Chat server
 - Supports multiple servers with invite codes
 - Supports "Reopen last session" from the popup
@@ -21,13 +29,13 @@ This extension:
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 24+
 - Git
 
 ### Setup
 
 ```bash
-git clone https://github.com/yourusername/vtt-chat-extension.git
+git clone https://github.com/AndyProsser/vtt-chat-extension.git
 cd vtt-chat-extension
 npm install
 ```
@@ -73,9 +81,10 @@ npm run package  # Creates ZIP files for distribution
 
 ---
 
+
 ## 📋 Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed technical documentation.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical details and VTT-specific integration notes.
 
 ---
 
@@ -88,6 +97,15 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed technical document
 5. Submit a PR
 
 ---
+
+## 🗺️ Roadmap
+
+- **D&D Beyond**: Full support (character/campaign detection, onboarding, sync)
+- **Roll20**: Character/campaign detection, chat log integration, onboarding (in progress)
+- **Foundry VTT**: Character/game detection, onboarding (planned)
+- **Other VTTs**: Community-driven support for additional platforms (planned)
+
+See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) for feature ideas and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for integration details.
 
 ## 📄 License
 

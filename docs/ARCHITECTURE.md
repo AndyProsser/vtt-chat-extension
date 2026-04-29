@@ -14,45 +14,42 @@ Below is the full **ARCHITECTURE.md**.
 
 ---
 
-# 🏗️ **ARCHITECTURE.md — VTT‑Chat DDB Connector Extension**
 
-This document defines the architecture, responsibilities, data flow, and build system for the **VTT‑Chat D&D Beyond Connector** browser extension.  
-It is written to guide **GitHub Copilot** and other AI tools so they can safely generate, modify, and extend the project.
+# 🏗️ **ARCHITECTURE.md — VTT‑Chat Universal VTT Connector Extension**
+
+This document defines the architecture, responsibilities, data flow, and build system for the **VTT‑Chat Universal VTT Connector** browser extension.
+It is written to guide contributors and AI tools so they can safely generate, modify, and extend the project.
 
 ---
 
+
 # 1. 🎯 Purpose
 
-The extension enables **one‑click onboarding** into a self‑hosted **VTT‑Chat** server directly from **D&D Beyond**.
+The extension enables **one‑click onboarding** into a self‑hosted **VTT‑Chat** server directly from supported Virtual Tabletops (VTTs).
 
 It provides:
 
-- Automatic detection of logged‑in DDB users  
-- Character list retrieval  
-- Campaign details retrieval  
-- DM vs Player role detection  
-- Injection of a “Launch VTT‑Chat” button into DDB pages  
-- A unified `/api/connect` onboarding flow  
-- Multi‑server support with invite codes  
-- “Reopen last session” functionality  
+- Automatic detection of logged‑in users on supported VTTs
+- Character list/game/campaign retrieval
+- DM vs Player role detection
+- Injection of a “Launch VTT‑Chat” button into VTT pages
+- A unified onboarding flow for all VTTs
+- Multi‑server support with invite codes
+- “Reopen last session” functionality
 
 The extension works in **Firefox**, **Chrome**, and **Edge** using a shared codebase.
 
 ---
+
+extension/
 
 # 2. 🧩 High‑Level Architecture
 
 ```
 extension/
 │
-├── create-extension.js         # Master build script
-├── create-content.js           # Generates content.js
-├── create-background.js        # Generates background.js
-├── create-ui.js                # Generates popup.html + popup.js
-├── create-manifests.js         # Generates manifest files
-│
 ├── src/
-│   ├── content.js              # Injected into DDB pages
+│   ├── content.js              # Injected into supported VTT pages
 │   ├── background.js           # Service worker (MV3)
 │   ├── popup.html              # Toolbar popup UI
 │   ├── popup.js                # Popup logic
@@ -72,40 +69,40 @@ extension/
 
 # 3. 🧠 Core Components
 
+
 ## 3.1 `content.js` — Page Integration Layer
 
 Runs on:
 
-- `https://www.dndbeyond.com/characters/*`
-- `https://www.dndbeyond.com/campaigns/*`
+- D&D Beyond: `https://www.dndbeyond.com/characters/*`, `https://www.dndbeyond.com/campaigns/*`
+- Roll20: `https://app.roll20.net/*` (planned)
+- Foundry VTT: `https://*/game` (planned)
+- Others: (planned)
 
 Responsibilities:
 
-- Extract logged‑in DDB user (MegaMenu, Cobalt, Next.js Flight)
-- Fetch DDB auth token (`/v1/cobalt-token`)
-- Fetch character list
-- Fetch campaign details (`/campaigns/v1/details/:id`)
-- Determine:
-  - DM vs Player
-  - Character ownership
-  - Campaign membership
+- Extract logged‑in user and character/campaign/game context from each VTT
+- Fetch platform-specific tokens as needed
+- Fetch character/game/campaign details
+- Determine DM vs Player
 - Inject “Launch VTT‑Chat” button
 - Send onboarding payload to background script
 
-### Data sent to background:
+### Data sent to background (example):
 
 ```json
 {
-  "ddbUser": { "id": 123, "displayName": "...", "avatarUrl": "..." },
-  "ddbCampaignId": "123456",
-  "ddbCampaignName": "My Campaign",
+  "externalSystem": "dndbeyond" | "roll20" | "foundry" | ...,
+  "user": { "id": "...", "displayName": "...", "avatarUrl": "..." },
+  "campaignId": "...",
+  "campaignName": "...",
   "isDm": true,
   "character": {
-    "ddbCharacterId": 987,
-    "name": "Kaelen",
+    "id": "...",
+    "name": "...",
     "avatarUrl": "...",
-    "race": "Elf",
-    "className": "Ranger",
+    "race": "...",
+    "className": "...",
     "level": 5
   }
 }
@@ -113,18 +110,20 @@ Responsibilities:
 
 ---
 
+
 ## 3.2 `background.js` — Server Communication Layer
 
 Responsibilities:
 
 - Manage server list + active server
-- Handle `connect` messages from content script
-- POST to `/api/connect` on the VTT‑Chat server
+- Handle onboarding messages from content script
+- POST to `/api/connect` or `/api/auth/extension/guest-login` on the VTT‑Chat server
 - Open the returned session URL with `?token=...`
 - Store `lastSession` for relaunch
 - Provide cross‑browser compatibility (`browser` vs `chrome`)
 
 ---
+
 
 ## 3.3 `popup.html` + `popup.js` — Toolbar UI
 
@@ -154,74 +153,53 @@ Chrome/Edge variant.
 
 ---
 
+
 # 4. 🔐 Authentication & Data Flow
 
-## 4.1 DDB Authentication
+## 4.1 Platform Authentication
 
-The extension uses:
+The extension uses platform-specific authentication flows:
 
-```
-POST https://auth-service.dndbeyond.com/v1/cobalt-token
-```
+- **D&D Beyond:**
+  - `POST https://auth-service.dndbeyond.com/v1/cobalt-token` (JWT)
+  - Used for character/campaign APIs
+- **Roll20:**
+  - Uses cookies and window-scoped tokens (see [ROLL20-DATA.md](ROLL20-DATA.md))
+- **Foundry VTT:**
+  - Uses session cookies and in-page context (planned)
+- **Others:**
+  - Platform-specific
 
-This returns a JWT used for:
+## 4.2 Campaign/Game Details API
 
-- Character list API
-- Campaign details API
-
-## 4.2 Campaign Details API
-
-```
-GET https://api.dndbeyond.com/campaigns/v1/details/:id
-```
-
-Used to determine:
-
-- DM (`dmId`)
-- Active players
-- Active characters
-- Character ownership
+Each VTT has its own API for campaign/game/character details. See VTT-specific docs for details.
 
 ---
 
+browser.runtime.sendMessage({ type: "connect", payload })
+
 # 5. 🚀 VTT‑Chat Onboarding Flow
 
-### 1. User clicks “Launch VTT‑Chat”
-### 2. content.js gathers:
+1. User clicks “Launch VTT‑Chat”
+2. content.js gathers:
+  - User identity
+  - Character (if applicable)
+  - Campaign/game details
+  - DM flag
+3. content.js → background.js
+  - `browser.runtime.sendMessage({ type: "connect", payload })`
+4. background.js → VTT‑Chat server
+  - `POST /api/connect` or `/api/auth/extension/guest-login`
+5. Server returns session info and token
+6. background.js opens session in new tab
+# 7. 🌐 Multi-VTT Roadmap
 
-- DDB user
-- Character (if applicable)
-- Campaign details
-- DM flag
+- **D&D Beyond**: Full support (character/campaign detection, onboarding, sync)
+- **Roll20**: Character/campaign detection, chat log integration, onboarding (in progress)
+- **Foundry VTT**: Character/game detection, onboarding (planned)
+- **Other VTTs**: Community-driven support for additional platforms (planned)
 
-### 3. content.js → background.js
-
-```
-browser.runtime.sendMessage({ type: "connect", payload })
-```
-
-### 4. background.js → VTT‑Chat server
-
-```
-POST /api/connect
-```
-
-### 5. Server returns:
-
-```json
-{
-  "sessionId": "abc123",
-  "role": "dm",
-  "token": "jwt...",
-  "appUrl": "/sessions/abc123"
-}
-```
-
-### 6. background.js opens:
-
-```
-https://server/sessions/abc123?token=jwt...
-```
+See [../README.md](../README.md) and [IMPROVEMENTS.md](IMPROVEMENTS.md) for more details.
 
 ---
 
