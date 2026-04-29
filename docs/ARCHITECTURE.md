@@ -1,19 +1,8 @@
-Absolutely, Andy — I can create a **clean, authoritative ARCHITECTURE.md** that is specifically designed to guide GitHub AI tools (Copilot Chat, Copilot Workspace, Copilot Edits, etc.) so they always understand:
-
-- the purpose of the extension  
-- the structure of the repo  
-- the build system  
-- the onboarding flow  
-- the constraints  
-- the expected behavior  
-
-This document is written in a way that AI tools *love*: declarative, explicit, structured, and free of ambiguity.  
-It will help Copilot reason about your project without hallucinating or rewriting things incorrectly.
-
-Below is the full **ARCHITECTURE.md**.
+For integration and onboarding flow, see [INTEGRATION.md](./INTEGRATION.md).
+For D&D Beyond extraction details, see [DDB-DATA-EXTRACTION.md](./DDB-DATA-EXTRACTION.md).
+For Roll20 extraction details, see [ROLL20-DATA-EXTRACTION.md](./ROLL20-DATA-EXTRACTION.md).
 
 ---
-
 
 # 🏗️ **ARCHITECTURE.md — VTT‑Chat Universal VTT Connector Extension**
 

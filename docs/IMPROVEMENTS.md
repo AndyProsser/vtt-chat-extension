@@ -17,6 +17,14 @@ This extension is evolving from a D&D Beyond-specific connector to a universal V
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for technical details and VTT-specific integration notes. See [../README.md](../README.md) for project overview and roadmap.
 
+---
+
+For integration and onboarding flow, see [INTEGRATION.md](./INTEGRATION.md).
+For D&D Beyond extraction details, see [DDB-DATA-EXTRACTION.md](./DDB-DATA-EXTRACTION.md).
+For Roll20 extraction details, see [ROLL20-DATA-EXTRACTION.md](./ROLL20-DATA-EXTRACTION.md).
+
+---
+
 # Code Quality & DevOps Improvements
 
 This document outlines the improvements made to the VTT-Chat DDB Connector extension and recommends further enhancements.

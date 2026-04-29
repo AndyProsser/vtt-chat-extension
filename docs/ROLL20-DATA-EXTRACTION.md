@@ -1,6 +1,50 @@
 # ROLL20 Data Extraction (DC1)
 
-## Character Sheet
+This document describes how the extension extracts user, character, and campaign data from Roll20 to support VTT-Chat onboarding and session sync. See [INTEGRATION.md](./INTEGRATION.md) for the universal onboarding flow and payload shape.
+
+## User Extraction
+- The extension reads user info from window properties:
+  - `d20_account_id` (user id)
+  - `d20_account_display_name` (display name)
+  - `d20_account_email` (email)
+  - `d20_account_role` (role)
+  - Avatar is not always present; if missing, VTT-Chat will use a placeholder.
+
+## Campaign Extraction
+- Campaigns are fetched from:
+  - `GET https://app.roll20.net/navbar/campaigns_data` (cookie auth)
+  - Each campaign: `id`, `name`, `thumbnail`
+
+## Character List Extraction
+- Characters are fetched from:
+  - `GET https://app.roll20.net/navbar/characters_data` (cookie auth)
+  - Each character: `id`, `name`, `thumbnail`, `short_name`, `long_name`
+
+## Character Details Extraction
+- For each character, fetch details from:
+  - `GET https://character-api.roll20.net/character/{id}` (Bearer `window.hydra_access_token`)
+  - Main fields:
+    - `character.id` (numeric Roll20 id)
+    - `character.name` (display name)
+    - `character.avatarurl` (may be empty)
+    - `campaign_id` (if present)
+    - `account_id` (owner)
+    - `charsheettype` (e.g., dnd2024byroll20)
+    - `json` (stringified JSON with nested fields)
+    - `firebaseCharacter.char-attribs` (attributes, e.g., level, class, race)
+- You must parse `firebaseCharacter.char-attribs` to extract:
+  - Level (e.g., `char-attribs.level` or similar)
+  - Class (e.g., `char-attribs.class` or similar)
+  - Race (e.g., `char-attribs.race` or similar)
+  - The structure may differ by sheet type; inspect actual keys.
+
+## Normalization
+- Normalize extracted data to match the VTT-Chat payload shape (see [INTEGRATION.md](./INTEGRATION.md)).
+- If avatar URLs are empty, VTT-Chat will insert a generic placeholder.
+
+---
+
+### Character Sheet
 
 https://app.roll20.net/characters/sheet/17043231
 
@@ -127,12 +171,3 @@ Auth: Bearer Token (window.hydra_access_token)
 }
 ```
 
----
-
----
-
-For D&D Beyond data extraction, see [DDB-DATA-EXTRACTION.md](./DDB-DATA-EXTRACTION.md).
-
-For integration and onboarding flow, see [INTEGRATION.md](./INTEGRATION.md).
-
----
