@@ -4,9 +4,11 @@
 A cross‑browser extension (Firefox, Chrome, Edge) that lets DMs and players launch a VTT‑Chat session directly from supported Virtual Tabletops (VTTs).
 
 **Supported VTTs:**
+
 - D&D Beyond (full integration)
 
 **Planned/Upcoming:**
+
 - Roll20 (in progress)
 - Foundry VTT (planned)
 - Additional web-based tabletops (planned)
@@ -47,6 +49,7 @@ npm run build
 ```
 
 This generates:
+
 - `dist-firefox/` — Firefox extension
 - `dist-chrome/` — Chrome/Edge extension
 
@@ -80,7 +83,6 @@ npm run package  # Creates ZIP files for distribution
 3. Click "Load unpacked" > Select `dist-chrome/`
 
 ---
-
 
 ## 📋 Architecture
 
