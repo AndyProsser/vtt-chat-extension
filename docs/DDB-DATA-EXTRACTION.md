@@ -19,14 +19,20 @@ This section describes how the extension extracts user, character, and campaign 
 
 ## Character Data
 
-- After extracting the charcaters, the extension determines the OWNED characterId
+- After extracting the characters, the extension determines the OWNED characterId
 - Then fetches the character details via:
-  - `GET https://character-service.dndbeyond.com/character/v5/character/:id?includeCustomItems=true` with the JWT.
+  - `GET https://character-service.dndbeyond.com/character/v5/character/:characterId?includeCustomItems=true` with the JWT.
+- Relevant response paths:
+  - `data.inventory` — array of item objects for the character's inventory
+  - `data.currency` — object with denomination keys (`gp`, `sp`, `cp`, `ep`, `pp`)
 
-## Party Inentory
+## Party Inventory
 
 - For campaign party inventory, the extension fetches:
   - `GET https://character-service.dndbeyond.com/character/v5/party/inventory/:campaignId` with the JWT.
+- Relevant response paths:
+  - `data.partyItems` — array of item objects belonging to the party
+  - `data.currency` — shared party currency with denomination keys (`gp`, `sp`, `cp`, `ep`, `pp`)
 
 ## Campaign Details
 

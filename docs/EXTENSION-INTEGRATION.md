@@ -168,6 +168,19 @@ Only `name`, `race`, `class`, `subclass`, and `avatarUrl` are top-level DB colum
 - XHR / GraphQL interception (DDB uses GraphQL for live updates)
 - MutationObserver for SPA navigation and live stat changes
 
+### Inventory & Currency Extraction
+
+Inventory and currency are **not** extracted from the DOM or intercepted XHR. They are fetched directly from the DDB character service API using the JWT obtained during the cobalt-token flow:
+
+| Data | DDB API Endpoint | Response Path |
+| --- | --- | --- |
+| Player inventory | `GET https://character-service.dndbeyond.com/character/v5/character/:characterId?includeCustomItems=true` | `data.inventory` |
+| Player currency | (same endpoint) | `data.currency` |
+| Party inventory | `GET https://character-service.dndbeyond.com/character/v5/party/inventory/:campaignId` | `data.partyItems` |
+| Party currency | (same endpoint) | `data.currency` |
+
+These calls are made by the background script (which holds the JWT) and the results are forwarded to the content script for mapping into the sync payload.
+
 ### Campaign Metadata
 
 - Campaign ID
@@ -439,8 +452,8 @@ The extension should batch character, inventory, and currency updates into a sin
 The extension should sync inventory and currency:
 
 - On character sheet page load (full sync)
-- When DDB fires an XHR response that indicates item/currency state changed (incremental)
-- Before the user clicks **Launch Chat** (ensures state is current on join)
+- On a short polling interval while the character sheet is open (re-fetch DDB API endpoints to detect changes)
+- Before the user clicks **Launch Chat** (re-fetch to ensure state is current on join)
 
 ---
 
