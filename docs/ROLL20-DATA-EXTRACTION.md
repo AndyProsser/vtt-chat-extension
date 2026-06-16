@@ -3,6 +3,7 @@
 This document describes how the extension extracts user, character, and campaign data from Roll20 to support VTT-Chat onboarding and session sync. See [INTEGRATION.md](./INTEGRATION.md) for the universal onboarding flow and payload shape.
 
 ## User Extraction
+
 - The extension reads user info from window properties:
   - `d20_account_id` (user id)
   - `d20_account_display_name` (display name)
@@ -11,16 +12,19 @@ This document describes how the extension extracts user, character, and campaign
   - Avatar is not always present; if missing, VTT-Chat will use a placeholder.
 
 ## Campaign Extraction
+
 - Campaigns are fetched from:
   - `GET https://app.roll20.net/navbar/campaigns_data` (cookie auth)
   - Each campaign: `id`, `name`, `thumbnail`
 
 ## Character List Extraction
+
 - Characters are fetched from:
   - `GET https://app.roll20.net/navbar/characters_data` (cookie auth)
   - Each character: `id`, `name`, `thumbnail`, `short_name`, `long_name`
 
 ## Character Details Extraction
+
 - For each character, fetch details from:
   - `GET https://character-api.roll20.net/character/{id}` (Bearer `window.hydra_access_token`)
   - Main fields:
@@ -39,6 +43,7 @@ This document describes how the extension extracts user, character, and campaign
   - The structure may differ by sheet type; inspect actual keys.
 
 ## Normalization
+
 - Normalize extracted data to match the VTT-Chat payload shape (see [INTEGRATION.md](./INTEGRATION.md)).
 - If avatar URLs are empty, VTT-Chat will insert a generic placeholder.
 
@@ -170,4 +175,3 @@ Auth: Bearer Token (window.hydra_access_token)
   }
 }
 ```
-

@@ -2,6 +2,11 @@
 
 This section describes how the extension extracts user, character, and campaign data from D&D Beyond (DDB) to support VTT-Chat onboarding and session sync.
 
+For the reverse direction — pushing currency changes from vtt-chat back to DDB — see the experimental,
+unofficial write path documented in [DDB-CURRENCY-WRITEBACK.md](DDB-CURRENCY-WRITEBACK.md). That endpoint
+is undocumented by DDB and likely violates their ToS; read the caution banner before building anything
+against it.
+
 ## User Extraction
 
 - The extension attempts to extract the logged-in user from multiple sources:

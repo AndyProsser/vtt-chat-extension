@@ -1,5 +1,6 @@
 For integration and onboarding flow, see [INTEGRATION.md](./INTEGRATION.md).
 For D&D Beyond extraction details, see [DDB-DATA-EXTRACTION.md](./DDB-DATA-EXTRACTION.md).
+For the (unofficial, experimental) D&D Beyond currency write-back, see [DDB-CURRENCY-WRITEBACK.md](./DDB-CURRENCY-WRITEBACK.md).
 For Roll20 extraction details, see [ROLL20-DATA-EXTRACTION.md](./ROLL20-DATA-EXTRACTION.md).
 
 ---
@@ -10,7 +11,6 @@ This document defines the architecture, responsibilities, data flow, and build s
 It is written to guide contributors and AI tools so they can safely generate, modify, and extend the project.
 
 ---
-
 
 # 1. 🎯 Purpose
 
@@ -34,7 +34,7 @@ extension/
 
 # 2. 🧩 High‑Level Architecture
 
-```
+```text
 extension/
 │
 ├── src/
@@ -57,7 +57,6 @@ extension/
 ---
 
 # 3. 🧠 Core Components
-
 
 ## 3.1 `content.js` — Page Integration Layer
 
@@ -99,7 +98,6 @@ Responsibilities:
 
 ---
 
-
 ## 3.2 `background.js` — Server Communication Layer
 
 Responsibilities:
@@ -112,7 +110,6 @@ Responsibilities:
 - Provide cross‑browser compatibility (`browser` vs `chrome`)
 
 ---
-
 
 ## 3.3 `popup.html` + `popup.js` — Toolbar UI
 
@@ -129,19 +126,21 @@ Responsibilities:
 ## 3.4 Manifest Files
 
 ### `manifest.base.json`
+
 Shared across all browsers.
 
 ### `manifest.firefox.json`
+
 Adds:
 
 - `browser_specific_settings`
 - `background.type = "module"`
 
 ### `manifest.chrome.json`
+
 Chrome/Edge variant.
 
 ---
-
 
 # 4. 🔐 Authentication & Data Flow
 
@@ -171,16 +170,23 @@ browser.runtime.sendMessage({ type: "connect", payload })
 
 1. User clicks “Launch VTT‑Chat”
 2. content.js gathers:
-  - User identity
-  - Character (if applicable)
-  - Campaign/game details
-  - DM flag
+
+- User identity
+- Character (if applicable)
+- Campaign/game details
+- DM flag
+
 3. content.js → background.js
-  - `browser.runtime.sendMessage({ type: "connect", payload })`
+
+- `browser.runtime.sendMessage({ type: "connect", payload })`
+
 4. background.js → VTT‑Chat server
-  - `POST /api/connect` or `/api/auth/extension/guest-login`
+
+- `POST /api/connect` or `/api/auth/extension/guest-login`
+
 5. Server returns session info and token
 6. background.js opens session in new tab
+
 # 7. 🌐 Multi-VTT Roadmap
 
 - **D&D Beyond**: Full support (character/campaign detection, onboarding, sync)
@@ -204,7 +210,7 @@ The build system is intentionally simple and deterministic so AI tools can safel
 
 All editable source files live in:
 
-```
+```text
 src/
   manifest.base.json
   manifest.firefox.json
@@ -218,7 +224,7 @@ src/
 
 You manually place your icons inside:
 
-```
+```text
 src/icons/icon-48.png
 src/icons/icon-96.png
 ```
@@ -231,7 +237,7 @@ This script:
 
 1. Loads `manifest.base.json`
 2. Merges it with either:
-   - `manifest.firefox.json`  
+   - `manifest.firefox.json`
    - `manifest.chrome.json`
 3. Writes the merged manifest to:
    - `dist-firefox/manifest.json`
@@ -263,7 +269,7 @@ function build(target, overrideFile) {
   const override = load(overrideFile);
   const manifest = { ...base, ...override };
 
-  const srcDir = 'src';
+  const srcDir = "src";
   const outDir = `dist-${target}`;
   write(outDir, "manifest.json", JSON.stringify(manifest, null, 2));
 
@@ -285,13 +291,13 @@ build("chrome", "manifest.chrome.json");
 
 Running:
 
-```
+```text
 node build.js
 ```
 
 Produces:
 
-```
+```text
 dist-firefox/
   manifest.json
   content.js
@@ -317,15 +323,15 @@ These folders are **load‑ready** in their respective browsers.
 
 Load via:
 
-```
+```text
 about:debugging → This Firefox → Load Temporary Add-on → dist-firefox/
 ```
 
 Firefox uses:
 
-- `manifest.firefox.json` overrides  
-- `"background": { "type": "module" }`  
-- `"browser_specific_settings"`  
+- `manifest.firefox.json` overrides
+- `"background": { "type": "module" }`
+- `"browser_specific_settings"`
 
 ---
 
@@ -333,14 +339,14 @@ Firefox uses:
 
 Load via:
 
-```
+```text
 chrome://extensions → Developer Mode → Load unpacked → dist-chrome/
 ```
 
 Chrome/Edge use:
 
-- `manifest.chrome.json` overrides  
-- `"background": { "service_worker": "background.js" }`  
+- `manifest.chrome.json` overrides
+- `"background": { "service_worker": "background.js" }`
 
 ---
 
@@ -350,19 +356,19 @@ To ensure safe modifications:
 
 ### AI MUST:
 
-- Keep the `src/` → `dist-*` structure intact  
-- Preserve the manifest merge logic  
-- Preserve the file copy logic  
-- Keep the build script idempotent  
-- Keep browser‑specific manifests separate  
+- Keep the `src/` → `dist-*` structure intact
+- Preserve the manifest merge logic
+- Preserve the file copy logic
+- Keep the build script idempotent
+- Keep browser‑specific manifests separate
 
 ### AI MUST NOT:
 
-- Inline manifest overrides into the base manifest  
-- Change output folder names  
-- Remove or rename `src/`  
-- Introduce bundlers unless explicitly requested  
-- Change the MV3 service worker structure  
+- Inline manifest overrides into the base manifest
+- Change output folder names
+- Remove or rename `src/`
+- Introduce bundlers unless explicitly requested
+- Change the MV3 service worker structure
 
 ---
 
@@ -441,9 +447,9 @@ To ensure safe and correct generation:
 
 If you'd like, I can also generate:
 
-- A **CONTRIBUTING.md**  
-- A **DEVELOPING.md** (for extension developers)  
-- A **SECURITY.md**  
-- A **CHANGELOG.md**  
+- A **CONTRIBUTING.md**
+- A **DEVELOPING.md** (for extension developers)
+- A **SECURITY.md**
+- A **CHANGELOG.md**
 
 Just tell me what you want next.
