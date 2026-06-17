@@ -5,249 +5,363 @@ if (typeof browser === "undefined") {
 
 const RELAUNCH_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 
+// ---------------------------------------------------------------------------
+// Storage helpers
+// ---------------------------------------------------------------------------
+
 async function getState() {
   const {
     servers = [],
     activeServerId = null,
     lastSession = null,
-    lastPreflight = null,
-    ddbUser = null
+    ddbUser = null,
+    ddbCharacterList = null,
+    savedInviteCode = ""
   } = await browser.storage.local.get([
     "servers",
     "activeServerId",
     "lastSession",
-    "lastPreflight",
-    "ddbUser"
+    "ddbUser",
+    "ddbCharacterList",
+    "savedInviteCode"
   ]);
-  return { servers, activeServerId, lastSession, lastPreflight, ddbUser };
+  return { servers, activeServerId, lastSession, ddbUser, ddbCharacterList, savedInviteCode };
 }
 
 async function saveState(partial) {
   await browser.storage.local.set(partial);
 }
 
-function byId(id) {
-  return document.getElementById(id);
+// ---------------------------------------------------------------------------
+// DOM helpers
+// ---------------------------------------------------------------------------
+
+function byId(id) { return document.getElementById(id); }
+
+function showStatus(text, kind) {
+  const el = byId("status");
+  el.textContent = text;
+  el.className = `status-box ${kind || ""}`;
+  el.style.display = "block";
 }
 
-function setStatus(el, text, kind) {
-  el.textContent = text;
-  el.className = `status ${kind || "muted"}`;
+function hideStatus() {
+  byId("status").style.display = "none";
 }
+
+// ---------------------------------------------------------------------------
+// Render DDB user
+// ---------------------------------------------------------------------------
+
+function renderUser(ddbUser) {
+  const nameEl = byId("user-name");
+  const subEl = byId("user-sub");
+  const avatarImg = byId("user-avatar");
+  const avatarPlaceholder = byId("user-avatar-placeholder");
+
+  if (!ddbUser) {
+    nameEl.textContent = "Not logged in to D&D Beyond";
+    subEl.textContent = "Open a D&D Beyond page first";
+    avatarImg.style.display = "none";
+    avatarPlaceholder.style.display = "flex";
+    return;
+  }
+
+  nameEl.textContent = ddbUser.displayName || "D&D Beyond User";
+  subEl.textContent = ddbUser.email || `User #${ddbUser.id}`;
+
+  if (ddbUser.avatarUrl) {
+    avatarImg.src = ddbUser.avatarUrl;
+    avatarImg.style.display = "block";
+    avatarPlaceholder.style.display = "none";
+  } else {
+    avatarImg.style.display = "none";
+    avatarPlaceholder.textContent = (ddbUser.displayName || "?")[0].toUpperCase();
+    avatarPlaceholder.style.display = "flex";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Render server list
+// ---------------------------------------------------------------------------
 
 function renderServers(servers, activeServerId) {
-  const container = document.getElementById("servers");
+  const container = byId("servers");
   container.innerHTML = "";
 
+  if (!servers.length) {
+    container.innerHTML = '<p style="color:#666;font-size:11px;margin:4px 0;">No servers added yet.</p>';
+    return;
+  }
+
   servers.forEach(server => {
-    const div = document.createElement("div");
-    div.className = "server";
+    const row = document.createElement("div");
+    row.className = "server-row";
 
     const radio = document.createElement("input");
     radio.type = "radio";
     radio.name = "activeServer";
+    radio.value = server.id;
     radio.checked = server.id === activeServerId;
-    radio.addEventListener("change", async () => {
-      await saveState({ activeServerId: server.id });
+    radio.addEventListener("change", () => saveState({ activeServerId: server.id }));
+
+    const info = document.createElement("div");
+    info.style.flex = "1";
+    info.innerHTML = `<div class="server-row-name">${escHtml(server.name)}</div>
+                      <div class="server-row-url">${escHtml(server.url)}</div>`;
+
+    row.appendChild(radio);
+    row.appendChild(info);
+    row.addEventListener("click", (e) => {
+      if (e.target !== radio) radio.click();
     });
-
-    const label = document.createElement("span");
-    label.textContent = `${server.name} (${server.url})`;
-
-    div.appendChild(radio);
-    div.appendChild(label);
-    container.appendChild(div);
+    container.appendChild(row);
   });
 }
 
-async function initPopup() {
-  const { servers, activeServerId, lastSession, lastPreflight, ddbUser } = await getState();
-  renderServers(servers, activeServerId);
+function escHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
-  const inviteCodeInput = byId("invite-code");
-  const emailInput = byId("email");
-  const externalUserIdInput = byId("external-user-id");
-  const runPreflightButton = byId("run-preflight");
-  const preflightStatus = byId("preflight-status");
-  const guestLoginSection = byId("guest-login-section");
-  const guestLoginButton = byId("guest-login");
-  const fullLoginSection = byId("full-login-section");
-  const fullLoginButton = byId("full-login");
-  const loginEmailInput = byId("login-email");
-  const loginPasswordInput = byId("login-password");
-  const authStateBox = byId("auth-state");
+// ---------------------------------------------------------------------------
+// Render character select
+// ---------------------------------------------------------------------------
 
-  emailInput.value = ddbUser?.email || "";
-  externalUserIdInput.value = ddbUser?.id ? String(ddbUser.id) : "";
-  loginEmailInput.value = ddbUser?.email || "";
+function renderCharacters(ddbCharacterList) {
+  const select = byId("character-select");
+  select.innerHTML = '<option value="">— select a character —</option>';
 
-  const syncAuthState = async () => {
-    const state = await browser.runtime.sendMessage({ type: "get-auth-state" });
-    if (!state?.ok || !state.hasAuthToken) {
-      setStatus(authStateBox, "No in-memory token", "muted");
-      return;
-    }
-
-    const expiry = state.tokenExpiresAt
-      ? new Date(state.tokenExpiresAt).toLocaleString()
-      : "unknown";
-    setStatus(
-      authStateBox,
-      `${state.authType || "UNKNOWN"} token in memory. Expires: ${expiry}`,
-      "ok"
-    );
-  };
-
-  const hideAuthBranches = () => {
-    guestLoginSection.style.display = "none";
-    fullLoginSection.style.display = "none";
-  };
-
-  if (lastPreflight?.checkedAt) {
-    const checkedAt = new Date(lastPreflight.checkedAt).toLocaleString();
-    const status = lastPreflight.ok ? "Previous pre-flight succeeded" : "Previous pre-flight failed";
-    setStatus(preflightStatus, `${status} at ${checkedAt}.`, lastPreflight.ok ? "ok" : "error");
+  const chars = (ddbCharacterList || []).filter(c => c.campaignId);
+  if (!chars.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No characters in a campaign found";
+    opt.disabled = true;
+    select.appendChild(opt);
+    return;
   }
 
-  // -----------------------------
-  // Add Server
-  // -----------------------------
+  chars.forEach(c => {
+    const opt = document.createElement("option");
+    opt.value = String(c.id);
+    const detail = [c.race, c.class, c.level ? `Lv${c.level}` : null].filter(Boolean).join(" · ");
+    opt.textContent = `${c.name}${c.campaignName ? ` — ${c.campaignName}` : ""}${detail ? ` (${detail})` : ""}`;
+    select.appendChild(opt);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Build the payload for background based on selected character
+// ---------------------------------------------------------------------------
+
+function buildLaunchPayload(ddbUser, ddbCharacterList, inviteCode, selectedCharId) {
+  const char = selectedCharId
+    ? (ddbCharacterList || []).find(c => String(c.id) === selectedCharId) || null
+    : null;
+
+  return {
+    inviteCode,
+    email: ddbUser?.email || "",
+    externalUserId: String(ddbUser?.id || ""),
+    displayName: ddbUser?.displayName || "",
+    avatarUrl: ddbUser?.avatarUrl || null,
+    externalCharacterId: char ? String(char.id) : null,
+    externalCampaignId: char ? String(char.campaignId || "") : "",
+    campaignName: char ? (char.campaignName || "") : "",
+    character: char ? {
+      externalCharacterId: String(char.id),
+      ddbCharacterId: char.id,
+      name: char.name,
+      race: char.race || null,
+      class: char.class || null,
+      level: char.level || null,
+      avatarUrl: char.avatar || null,
+      characterUrl: `https://www.dndbeyond.com/characters/${char.id}`
+    } : null
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Main popup init
+// ---------------------------------------------------------------------------
+
+async function initPopup() {
+  const { servers, activeServerId, lastSession, ddbUser, ddbCharacterList, savedInviteCode } =
+    await getState();
+
+  renderUser(ddbUser);
+  renderServers(servers, activeServerId);
+  renderCharacters(ddbCharacterList);
+
+  const inviteCodeInput = byId("invite-code");
+  const characterSelect = byId("character-select");
+  const connectBtn = byId("connect-launch");
+  const passwordSection = byId("password-section");
+  const passwordInput = byId("login-password");
+  const launchWithPwBtn = byId("launch-with-password");
+  const relaunchBtn = byId("relaunch");
+
+  // Restore saved invite code
+  if (savedInviteCode) inviteCodeInput.value = savedInviteCode;
+
+  // Save invite code as user types
+  inviteCodeInput.addEventListener("input", () => {
+    saveState({ savedInviteCode: inviteCodeInput.value.trim() });
+  });
+
+  // Add server
   byId("add-server").addEventListener("click", async () => {
     const name = prompt("Server name:");
     if (!name) return;
-
     const url = prompt("Server URL (e.g. https://vtt.example.com):");
     if (!url) return;
-
-    const serverCode = prompt("Server invite code:");
-    if (!serverCode) return;
-
+    const serverCode = prompt("Default invite code for this server (optional):");
     const id = crypto.randomUUID();
-    const newServers = [...servers, { id, name, url, serverCode }];
+    const newServers = [...servers, { id, name, url, serverCode: serverCode || "" }];
     await saveState({ servers: newServers, activeServerId: id });
     renderServers(newServers, id);
   });
 
-  // -----------------------------
-  // Relaunch Last Session
-  // -----------------------------
-  const relaunchBtn = byId("relaunch");
+  // Remove active server
+  byId("remove-server").addEventListener("click", async () => {
+    const { servers: current, activeServerId: active } = await getState();
+    if (!active) return;
+    if (!confirm("Remove the selected server?")) return;
+    const next = current.filter(s => s.id !== active);
+    const nextActive = next.length ? next[next.length - 1].id : null;
+    await saveState({ servers: next, activeServerId: nextActive });
+    renderServers(next, nextActive);
+  });
 
+  // Relaunch last session
   const canRelaunch =
     lastSession &&
     Date.now() - lastSession.connectedAt <= RELAUNCH_MAX_AGE_MS &&
     servers.some(s => s.id === lastSession.serverId);
-
-  if (!canRelaunch) {
-    relaunchBtn.disabled = true;
-  }
-
+  relaunchBtn.disabled = !canRelaunch;
   relaunchBtn.addEventListener("click", async () => {
-    const { servers, lastSession } = await getState();
-    if (!lastSession) return;
-
-    const server = servers.find(s => s.id === lastSession.serverId);
+    const { servers: sv, lastSession: ls } = await getState();
+    if (!ls) return;
+    const server = sv.find(s => s.id === ls.serverId);
     if (!server) return;
-
+    const code = ls.inviteCode || server.serverCode || "";
     browser.tabs.create({
-      url: `${server.url.replace(
-        /\/$/,
-        ""
-      )}/join/${encodeURIComponent(lastSession.inviteCode || server.serverCode || "")}`
+      url: `${server.url.replace(/\/$/, "")}/join/${encodeURIComponent(code)}`
     });
   });
 
-  runPreflightButton.addEventListener("click", async () => {
-    hideAuthBranches();
-    setStatus(preflightStatus, "Running pre-flight...", "muted");
-
-    const payload = {
-      inviteCode: inviteCodeInput.value.trim(),
-      email: emailInput.value.trim(),
-      externalUserId: externalUserIdInput.value.trim()
-    };
-
-    const result = await browser.runtime.sendMessage({ type: "run-preflight", payload });
-
-    if (!result?.ok) {
-      const message = result?.error || "Pre-flight failed";
-      if (result?.code === "INTEGRATION_NOT_AUTHORIZED") {
-        setStatus(
-          preflightStatus,
-          `Platform not enabled: ${message}`,
-          "error"
-        );
-        return;
-      }
-      setStatus(preflightStatus, message, "error");
+  // Connect & Launch
+  connectBtn.addEventListener("click", async () => {
+    const inviteCode = inviteCodeInput.value.trim();
+    if (!inviteCode) {
+      showStatus("Please enter an invite code.", "error");
+      return;
+    }
+    if (!ddbUser?.email && !ddbUser?.id) {
+      showStatus("No D&D Beyond user detected. Open a D&D Beyond page and try again.", "error");
       return;
     }
 
-    const suggestedFlow = result.preflight?.suggestedFlow || "unknown";
-    const accountStatus = result.preflight?.accountStatus || "unknown";
-    const campaignName = result.invite?.campaign?.name || "Unknown campaign";
-    setStatus(
-      preflightStatus,
-      `Online. Invite valid for ${campaignName}. accountStatus=${accountStatus}, suggestedFlow=${suggestedFlow}`,
-      "ok"
-    );
+    connectBtn.disabled = true;
+    passwordSection.style.display = "none";
+    hideStatus();
+    showStatus("Checking platform & invite…", "info");
 
-    if (suggestedFlow === "guest" || suggestedFlow === "auto-login") {
-      guestLoginSection.style.display = "block";
-    } else if (suggestedFlow === "authenticate") {
-      fullLoginSection.style.display = "block";
-      loginEmailInput.value = emailInput.value.trim();
-    }
-  });
+    // Save invite code
+    await saveState({ savedInviteCode: inviteCode });
 
-  guestLoginButton.addEventListener("click", async () => {
-    setStatus(preflightStatus, "Running guest login...", "muted");
-    const payload = {
-      inviteCode: inviteCodeInput.value.trim(),
-      email: emailInput.value.trim(),
-      externalUserId: externalUserIdInput.value.trim(),
-      externalCharacterId: null
-    };
-    const result = await browser.runtime.sendMessage({ type: "guest-login", payload });
-    if (!result?.ok) {
-      const message = result?.error || "Guest login failed";
-      if (result?.code === "INTEGRATION_NOT_AUTHORIZED") {
-        setStatus(preflightStatus, `Platform not enabled: ${message}`, "error");
-      } else {
-        setStatus(preflightStatus, message, "error");
+    const { ddbUser: freshUser } = await getState();
+
+    const preflightResult = await browser.runtime.sendMessage({
+      type: "run-preflight",
+      payload: {
+        inviteCode,
+        email: freshUser?.email || "",
+        externalUserId: String(freshUser?.id || "")
       }
+    });
+
+    if (!preflightResult?.ok) {
+      const msg = preflightResult?.error || "Pre-flight failed";
+      showStatus(msg, "error");
+      connectBtn.disabled = false;
       return;
     }
 
-    setStatus(preflightStatus, "Guest login succeeded. Token is stored in extension memory.", "ok");
-    await syncAuthState();
-  });
+    const campaignName = preflightResult.invite?.campaign?.name || "the campaign";
+    const flow = preflightResult.preflight?.suggestedFlow || "guest";
 
-  fullLoginButton.addEventListener("click", async () => {
-    setStatus(preflightStatus, "Running full-account login...", "muted");
-    const payload = {
-      email: loginEmailInput.value.trim(),
-      password: loginPasswordInput.value,
-      inviteCode: inviteCodeInput.value.trim(),
-      role: "PLAYER"
-    };
-
-    const result = await browser.runtime.sendMessage({ type: "full-login", payload });
-    if (!result?.ok) {
-      const message = result?.error || "Full login failed";
-      if (result?.code === "INTEGRATION_NOT_AUTHORIZED") {
-        setStatus(preflightStatus, `Platform not enabled: ${message}`, "error");
-      } else {
-        setStatus(preflightStatus, message, "error");
-      }
+    if (flow === "authenticate") {
+      showStatus(
+        `Invite valid for "${campaignName}". You have an existing account — enter your password below.`,
+        "info"
+      );
+      passwordSection.style.display = "block";
+      connectBtn.disabled = false;
       return;
     }
 
-    setStatus(preflightStatus, "Full-account login succeeded. Token is stored in extension memory.", "ok");
-    await syncAuthState();
+    // Guest or auto-login: proceed immediately
+    showStatus(`Joining "${campaignName}"…`, "info");
+
+    const { ddbCharacterList: freshChars } = await getState();
+    const selectedCharId = characterSelect.value || null;
+    const launchPayload = buildLaunchPayload(freshUser, freshChars, inviteCode, selectedCharId);
+
+    const result = await browser.runtime.sendMessage({
+      type: "guest-login-and-launch",
+      payload: launchPayload
+    });
+
+    if (!result?.ok) {
+      showStatus(result?.error || "Login failed.", "error");
+      connectBtn.disabled = false;
+      return;
+    }
+
+    showStatus(`Connected! Opening VTT-Chat…`, "ok");
+    connectBtn.disabled = false;
   });
 
-  await syncAuthState();
+  // Login & Launch (full account)
+  launchWithPwBtn.addEventListener("click", async () => {
+    const inviteCode = inviteCodeInput.value.trim();
+    const password = passwordInput.value;
+    if (!password) {
+      showStatus("Please enter your password.", "error");
+      return;
+    }
+
+    launchWithPwBtn.disabled = true;
+    showStatus("Logging in…", "info");
+
+    const { ddbUser: freshUser, ddbCharacterList: freshChars } = await getState();
+    const selectedCharId = characterSelect.value || null;
+    const launchPayload = {
+      ...buildLaunchPayload(freshUser, freshChars, inviteCode, selectedCharId),
+      password
+    };
+
+    const result = await browser.runtime.sendMessage({
+      type: "full-login-and-launch",
+      payload: launchPayload
+    });
+
+    if (!result?.ok) {
+      showStatus(result?.error || "Login failed.", "error");
+      launchWithPwBtn.disabled = false;
+      return;
+    }
+
+    showStatus("Connected! Opening VTT-Chat…", "ok");
+    launchWithPwBtn.disabled = false;
+    passwordSection.style.display = "none";
+    passwordInput.value = "";
+  });
 }
 
 initPopup();

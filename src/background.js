@@ -22,8 +22,16 @@ browser.runtime.onMessage.addListener((msg) => {
     return runGuestLoginForPopup(msg.payload || {});
   }
 
+  if (msg.type === "guest-login-and-launch") {
+    return runGuestLoginAndLaunch(msg.payload || {});
+  }
+
   if (msg.type === "full-login") {
     return runFullLoginForPopup(msg.payload || {});
+  }
+
+  if (msg.type === "full-login-and-launch") {
+    return runFullLoginAndLaunch(msg.payload || {});
   }
 
   if (msg.type === "get-auth-state") {
@@ -35,6 +43,10 @@ browser.runtime.onMessage.addListener((msg) => {
     return;
   }
 });
+
+// ---------------------------------------------------------------------------
+// State helpers
+// ---------------------------------------------------------------------------
 
 async function getState() {
   const {
@@ -66,16 +78,18 @@ function baseServerUrl(url) {
   return String(url || "").trim().replace(/\/$/, "");
 }
 
+// ---------------------------------------------------------------------------
+// JWT utilities
+// ---------------------------------------------------------------------------
+
 function decodeJwtPayload(token) {
   if (!token || typeof token !== "string") return null;
   const parts = token.split(".");
   if (parts.length < 2) return null;
-
   try {
     const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
     const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    const decoded = atob(padded);
-    return JSON.parse(decoded);
+    return JSON.parse(atob(padded));
   } catch {
     return null;
   }
@@ -87,9 +101,17 @@ function tokenExpiryMs(token) {
   return payload.exp * 1000;
 }
 
+function isTokenNearExpiry(session) {
+  if (!session || !session.expiresAt) return false;
+  return session.expiresAt - Date.now() <= TOKEN_RENEWAL_WINDOW_MS;
+}
+
+// ---------------------------------------------------------------------------
+// Session management
+// ---------------------------------------------------------------------------
+
 function setGuestSession(result, context) {
   if (!result || !result.token) return;
-
   guestSession = {
     token: result.token,
     expiresAt: tokenExpiryMs(result.token),
@@ -102,10 +124,31 @@ function setGuestSession(result, context) {
   };
 }
 
-function isTokenNearExpiry(session) {
-  if (!session || !session.expiresAt) return false;
-  return session.expiresAt - Date.now() <= TOKEN_RENEWAL_WINDOW_MS;
+async function ensureRenewedGuestToken(server) {
+  if (!guestSession || !guestSession.token || !isTokenNearExpiry(guestSession)) {
+    return guestSession?.token || null;
+  }
+  if (!guestSession.renewalPayload) return guestSession.token;
+
+  const renewed = await apiJson(server, "/api/auth/extension/guest-login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(guestSession.renewalPayload)
+  });
+
+  if (renewed.response.ok && renewed.json.token) {
+    setGuestSession(renewed.json, {
+      inviteCode: guestSession.inviteCode,
+      campaignId: renewed.json.user?.campaignId || guestSession.campaignId,
+      renewalPayload: guestSession.renewalPayload
+    });
+  }
+  return guestSession.token;
 }
+
+// ---------------------------------------------------------------------------
+// API helpers
+// ---------------------------------------------------------------------------
 
 async function apiJson(server, path, options = {}) {
   const response = await fetch(`${baseServerUrl(server.url)}${path}`, options);
@@ -113,10 +156,136 @@ async function apiJson(server, path, options = {}) {
   return { response, json };
 }
 
+// ---------------------------------------------------------------------------
+// Avatar upload (with session-storage fingerprint cache)
+// ---------------------------------------------------------------------------
+
+async function getAvatarFingerprint(externalCharacterId) {
+  try {
+    const key = `avatarFP:${externalCharacterId}`;
+    const data = await browser.storage.session.get(key);
+    return data[key] || null;
+  } catch {
+    return null;
+  }
+}
+
+async function setAvatarFingerprint(externalCharacterId, sourceUrl, hostedUrl) {
+  try {
+    const key = `avatarFP:${externalCharacterId}`;
+    await browser.storage.session.set({ [key]: { sourceUrl, hostedUrl } });
+  } catch {
+    // storage.session not available on older Firefox — silently skip
+  }
+}
+
+async function uploadAvatarIfNeeded(server, token, ddbAvatarUrl, externalCharacterId) {
+  if (!ddbAvatarUrl || !token) return null;
+
+  const cached = await getAvatarFingerprint(externalCharacterId);
+  if (cached && cached.sourceUrl === ddbAvatarUrl && cached.hostedUrl) {
+    return cached.hostedUrl;
+  }
+
+  let imageBlob;
+  try {
+    const imgRes = await fetch(ddbAvatarUrl);
+    if (!imgRes.ok) return null;
+    imageBlob = await imgRes.blob();
+  } catch {
+    return null;
+  }
+
+  if (imageBlob.size > 2 * 1024 * 1024) return null;
+
+  const formData = new FormData();
+  formData.append("image", imageBlob, "avatar.webp");
+
+  let uploadRes;
+  try {
+    uploadRes = await fetch(
+      `${baseServerUrl(server.url)}/api/integrations/external/avatar-upload`,
+      { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData }
+    );
+  } catch {
+    return null;
+  }
+
+  if (!uploadRes.ok) return null;
+  const uploadJson = await uploadRes.json().catch(() => ({}));
+  const hostedUrl = uploadJson.avatarUrl || null;
+
+  if (hostedUrl) {
+    await setAvatarFingerprint(externalCharacterId, ddbAvatarUrl, hostedUrl);
+  }
+  return hostedUrl;
+}
+
+// ---------------------------------------------------------------------------
+// Character + campaign sync
+// ---------------------------------------------------------------------------
+
+async function syncCharacterAndCampaign(server, token, campaignId, payload) {
+  if (!token || !campaignId) return;
+
+  const character = payload?.character || null;
+  const campaignPacket = payload?.campaignPacket || null;
+  const isDm = Boolean(payload?.isDm);
+
+  if (!character && !campaignPacket) return;
+
+  let avatarUrl = character?.avatarUrl || null;
+  if (avatarUrl && character?.externalCharacterId) {
+    const hosted = await uploadAvatarIfNeeded(
+      server, token, avatarUrl, character.externalCharacterId
+    );
+    if (hosted) avatarUrl = hosted;
+  }
+
+  const characterUpdate = character ? {
+    externalCharacterId: String(character.externalCharacterId || character.ddbCharacterId || ""),
+    name: character.name || undefined,
+    race: character.race || undefined,
+    class: character.class || undefined,
+    subclass: character.subclass || undefined,
+    level: typeof character.level === "number" ? character.level : undefined,
+    avatarUrl: avatarUrl || undefined,
+    characterUrl: character.characterUrl || undefined,
+    stats: character.stats || undefined
+  } : undefined;
+
+  if (characterUpdate && !characterUpdate.externalCharacterId) return;
+
+  const campaignUpdate = campaignPacket ? {
+    externalCampaignId: campaignPacket.externalCampaignId || undefined,
+    campaignName: campaignPacket.campaignName || undefined,
+    dmExternalUserId: campaignPacket.dmExternalUserId || undefined,
+    members: campaignPacket.members || undefined
+  } : undefined;
+
+  await apiJson(server, "/api/integrations/external/sync", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      campaignId,
+      externalSystem: EXTERNAL_SYSTEM,
+      source: isDm ? "dm" : "player",
+      characterUpdate,
+      campaignUpdate
+    })
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Context builders
+// ---------------------------------------------------------------------------
+
 function buildPopupContext(state, payload) {
   const ddbUser = state.ddbUser || {};
   const ddbActiveContext = state.ddbActiveContext || {};
-
   return {
     email: payload.email || ddbUser.email || "",
     externalUserId: String(payload.externalUserId || ddbUser.id || "").trim(),
@@ -129,27 +298,24 @@ function buildPopupContext(state, payload) {
   };
 }
 
-function buildCampaignPacket(payload, ddbActiveContext) {
+function buildCampaignPacketFromPayload(payload, ddbActiveContext) {
   if (payload.campaignPacket && typeof payload.campaignPacket === "object") {
     return payload.campaignPacket;
   }
-
   const externalCampaignId = String(payload.externalCampaignId || ddbActiveContext?.externalCampaignId || "").trim();
   const dmExternalUserId = String(payload.dmExternalUserId || ddbActiveContext?.dmExternalUserId || "").trim();
-  const campaignName = payload.campaignName || ddbActiveContext?.campaignName || undefined;
-  const members = Array.isArray(ddbActiveContext?.members) ? ddbActiveContext.members : undefined;
-
-  if (!externalCampaignId && !dmExternalUserId) {
-    return undefined;
-  }
-
+  if (!externalCampaignId && !dmExternalUserId) return undefined;
   return {
     externalCampaignId: externalCampaignId || undefined,
-    campaignName,
+    campaignName: payload.campaignName || ddbActiveContext?.campaignName || undefined,
     dmExternalUserId: dmExternalUserId || undefined,
-    members
+    members: Array.isArray(ddbActiveContext?.members) ? ddbActiveContext.members : undefined
   };
 }
+
+// ---------------------------------------------------------------------------
+// Preflight
+// ---------------------------------------------------------------------------
 
 async function runPreflightSequence(server, context, currentToken) {
   const platform = await apiJson(server, "/api/platform/status");
@@ -176,7 +342,6 @@ async function runPreflightSequence(server, context, currentToken) {
     server,
     `/api/campaigns/invite/${encodeURIComponent(context.inviteCode)}/validate`
   );
-
   if (!invite.response.ok || !invite.json.valid) {
     return {
       ok: false,
@@ -189,9 +354,7 @@ async function runPreflightSequence(server, context, currentToken) {
   }
 
   const headers = { "Content-Type": "application/json" };
-  if (currentToken) {
-    headers.Authorization = `Bearer ${currentToken}`;
-  }
+  if (currentToken) headers.Authorization = `Bearer ${currentToken}`;
 
   const preflight = await apiJson(server, "/api/auth/extension/preflight", {
     method: "POST",
@@ -203,7 +366,6 @@ async function runPreflightSequence(server, context, currentToken) {
       inviteCode: context.inviteCode
     })
   });
-
   if (!preflight.response.ok) {
     return {
       ok: false,
@@ -228,46 +390,14 @@ async function persistPreflightResult(data) {
   await browser.storage.local.set({ lastPreflight: data });
 }
 
-async function ensureRenewedGuestToken(server) {
-  if (!guestSession || !guestSession.token || !isTokenNearExpiry(guestSession)) {
-    return guestSession?.token || null;
-  }
-
-  if (!guestSession.renewalPayload) {
-    return guestSession.token;
-  }
-
-  const renewed = await apiJson(server, "/api/auth/extension/guest-login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(guestSession.renewalPayload)
-  });
-
-  if (renewed.response.ok && renewed.json.token) {
-    setGuestSession(renewed.json, {
-      inviteCode: guestSession.inviteCode,
-      campaignId: renewed.json.user?.campaignId || guestSession.campaignId,
-      renewalPayload: guestSession.renewalPayload
-    });
-    return guestSession.token;
-  }
-
-  return guestSession.token;
-}
-
 async function runPreflightForPopup(payload) {
   const server = await getActiveServer();
-  if (!server) {
-    return { ok: false, error: "No active server configured" };
-  }
+  if (!server) return { ok: false, error: "No active server configured" };
 
   const state = await getState();
   const context = buildPopupContext(state, payload);
   if (!context.inviteCode || !context.email || !context.externalUserId) {
-    return {
-      ok: false,
-      error: "inviteCode, email, and external user ID are required"
-    };
+    return { ok: false, error: "inviteCode, email, and external user ID are required" };
   }
 
   const currentToken = await ensureRenewedGuestToken(server);
@@ -276,19 +406,18 @@ async function runPreflightForPopup(payload) {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Guest login
+// ---------------------------------------------------------------------------
+
 async function runGuestLoginForPopup(payload) {
   const server = await getActiveServer();
-  if (!server) {
-    return { ok: false, error: "No active server configured" };
-  }
+  if (!server) return { ok: false, error: "No active server configured" };
 
   const state = await getState();
   const context = buildPopupContext(state, payload);
   if (!context.inviteCode || !context.email || !context.externalUserId) {
-    return {
-      ok: false,
-      error: "inviteCode, email, and external user ID are required"
-    };
+    return { ok: false, error: "inviteCode, email, and external user ID are required" };
   }
 
   const selectedCharacter = Array.isArray(state.ddbCharacterList)
@@ -304,10 +433,7 @@ async function runGuestLoginForPopup(payload) {
         race: payload.character.race || undefined,
         class: payload.character.class || payload.character.className || undefined,
         subclass: payload.character.subclass || undefined,
-        level:
-          typeof payload.character.level === "number"
-            ? payload.character.level
-            : undefined,
+        level: typeof payload.character.level === "number" ? payload.character.level : undefined,
         avatarUrl: payload.character.avatarUrl || undefined,
         characterUrl: payload.character.characterUrl || undefined
       }
@@ -320,7 +446,7 @@ async function runGuestLoginForPopup(payload) {
     email: context.email,
     displayName: context.displayName || undefined,
     avatarUrl: context.avatarUrl || undefined,
-    character: payloadCharacter && payloadCharacter.externalCharacterId
+    character: payloadCharacter?.externalCharacterId
       ? payloadCharacter
       : selectedCharacter
       ? {
@@ -332,7 +458,7 @@ async function runGuestLoginForPopup(payload) {
           characterUrl: `https://www.dndbeyond.com/characters/${selectedCharacter.id}`
         }
       : undefined,
-    campaignPacket: buildCampaignPacket(payload, state.ddbActiveContext)
+    campaignPacket: buildCampaignPacketFromPayload(payload, state.ddbActiveContext)
   };
 
   const login = await apiJson(server, "/api/auth/extension/guest-login", {
@@ -377,19 +503,20 @@ async function runGuestLoginForPopup(payload) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Full account login
+// ---------------------------------------------------------------------------
+
 async function runFullLoginForPopup(payload) {
   const server = await getActiveServer();
-  if (!server) {
-    return { ok: false, error: "No active server configured" };
-  }
+  if (!server) return { ok: false, error: "No active server configured" };
 
   const email = String(payload.email || "").trim();
   const password = String(payload.password || "");
-  const role = payload.role === "DM" ? "DM" : "PLAYER";
+  if (!email || !password) return { ok: false, error: "email and password are required" };
 
-  if (!email || !password) {
-    return { ok: false, error: "email and password are required" };
-  }
+  const state = await getState();
+  const ddbUser = state.ddbUser || {};
 
   const login = await apiJson(server, "/api/auth/login", {
     method: "POST",
@@ -398,9 +525,9 @@ async function runFullLoginForPopup(payload) {
       username: email,
       email,
       password,
-      role,
-      displayName: payload.displayName || undefined,
-      avatarUrl: payload.avatarUrl || undefined
+      role: payload.role === "DM" ? "DM" : "PLAYER",
+      displayName: payload.displayName || ddbUser.displayName || undefined,
+      avatarUrl: payload.avatarUrl || ddbUser.avatarUrl || undefined
     })
   });
 
@@ -415,8 +542,8 @@ async function runFullLoginForPopup(payload) {
   guestSession = {
     token: login.json.token,
     expiresAt: tokenExpiryMs(login.json.token),
-    campaignId: null,
-    inviteCode: null,
+    campaignId: login.json.user?.campaignId || null,
+    inviteCode: String(payload.inviteCode || "").trim() || null,
     renewalPayload: null,
     user: login.json.user,
     character: null,
@@ -427,7 +554,7 @@ async function runFullLoginForPopup(payload) {
     lastSession: {
       serverId: server.id,
       token: login.json.token,
-      campaignId: null,
+      campaignId: login.json.user?.campaignId || null,
       inviteCode: String(payload.inviteCode || "").trim() || null,
       role: login.json.user?.role || null,
       connectedAt: Date.now(),
@@ -443,6 +570,56 @@ async function runFullLoginForPopup(payload) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Login-and-launch helpers (login + sync + open tab)
+// ---------------------------------------------------------------------------
+
+async function launchTab(server, inviteCode) {
+  browser.tabs.create({
+    url: `${baseServerUrl(server.url)}/join/${encodeURIComponent(inviteCode)}`
+  });
+}
+
+async function runGuestLoginAndLaunch(payload) {
+  const server = await getActiveServer();
+  if (!server) return { ok: false, error: "No active server configured" };
+
+  const loginResult = await runGuestLoginForPopup(payload);
+  if (!loginResult?.ok) return loginResult;
+
+  const campaignId = loginResult.user?.campaignId;
+  if (campaignId) {
+    await syncCharacterAndCampaign(server, loginResult.token, campaignId, payload);
+  }
+
+  await launchTab(server, payload.inviteCode || "");
+  return loginResult;
+}
+
+async function runFullLoginAndLaunch(payload) {
+  const server = await getActiveServer();
+  if (!server) return { ok: false, error: "No active server configured" };
+
+  const loginResult = await runFullLoginForPopup(payload);
+  if (!loginResult?.ok) return loginResult;
+
+  const campaignId = loginResult.user?.campaignId;
+  if (campaignId) {
+    const state = await getState();
+    await syncCharacterAndCampaign(server, loginResult.token, campaignId, {
+      ...payload,
+      campaignPacket: buildCampaignPacketFromPayload(payload, state.ddbActiveContext)
+    });
+  }
+
+  await launchTab(server, payload.inviteCode || "");
+  return loginResult;
+}
+
+// ---------------------------------------------------------------------------
+// Auth state (popup query)
+// ---------------------------------------------------------------------------
+
 async function getAuthStateForPopup() {
   const { lastPreflight } = await getState();
   return {
@@ -455,16 +632,16 @@ async function getAuthStateForPopup() {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Live character update (content script diff detection)
+// ---------------------------------------------------------------------------
+
 async function handleCharacterUpdate(payload) {
   const server = await getActiveServer();
-  if (!server || !guestSession?.token) {
-    return;
-  }
+  if (!server || !guestSession?.token) return;
 
   const token = await ensureRenewedGuestToken(server);
-  if (!token || !guestSession?.campaignId || !payload.externalCharacterId) {
-    return;
-  }
+  if (!token || !guestSession?.campaignId || !payload.externalCharacterId) return;
 
   await apiJson(server, "/api/integrations/external/sync", {
     method: "POST",
@@ -481,16 +658,19 @@ async function handleCharacterUpdate(payload) {
         level: typeof payload.level === "number" ? payload.level : undefined,
         class: payload.className || undefined,
         subclass: payload.subclass || undefined
-      },
-      campaignUpdate: null
+      }
     })
   });
 }
 
+// ---------------------------------------------------------------------------
+// Connect (triggered by content script inject button)
+// ---------------------------------------------------------------------------
+
 async function handleConnect(payload) {
   const server = await getActiveServer();
   if (!server) {
-    console.warn("No active VTT-Chat server configured");
+    console.warn("[VTT-Chat] No active server configured");
     return;
   }
 
@@ -502,30 +682,29 @@ async function handleConnect(payload) {
     inviteCode: String(server.serverCode || "").trim()
   };
 
-  const preflightResult = await runPreflightSequence(server, context, await ensureRenewedGuestToken(server));
-  await persistPreflightResult({
-    ...preflightResult,
-    checkedAt: Date.now(),
-    serverId: server.id
-  });
+  const preflightResult = await runPreflightSequence(
+    server, context, await ensureRenewedGuestToken(server)
+  );
+  await persistPreflightResult({ ...preflightResult, checkedAt: Date.now(), serverId: server.id });
 
-  if (!preflightResult.ok || !preflightResult.preflight) {
-    return;
-  }
+  if (!preflightResult.ok || !preflightResult.preflight) return;
 
   const flow = preflightResult.preflight.suggestedFlow;
+
   if (flow === "already-authenticated") {
-    browser.tabs.create({
-      url: `${baseServerUrl(server.url)}/join/${encodeURIComponent(context.inviteCode)}`
-    });
+    const token = await ensureRenewedGuestToken(server);
+    const campaignId = guestSession?.campaignId
+      || preflightResult.invite?.campaign?.id;
+    if (token && campaignId) {
+      await syncCharacterAndCampaign(server, token, campaignId, payload);
+    }
+    await launchTab(server, context.inviteCode);
     return;
   }
 
-  if (flow !== "guest" && flow !== "auto-login") {
-    return;
-  }
+  if (flow !== "guest" && flow !== "auto-login") return;
 
-  const guestLoginResult = await runGuestLoginForPopup({
+  const loginResult = await runGuestLoginForPopup({
     inviteCode: context.inviteCode,
     email: context.email,
     externalUserId: context.externalUserId,
@@ -533,17 +712,20 @@ async function handleConnect(payload) {
     avatarUrl: context.avatarUrl,
     externalCharacterId: payload?.character?.ddbCharacterId || payload?.character?.externalCharacterId || null,
     character: payload?.character || null,
-    externalCampaignId: payload?.ddbCampaignId || payload?.externalCampaignId || "",
-    campaignName: payload?.ddbCampaignName || payload?.campaignName || "",
-    dmExternalUserId: payload?.dmExternalUserId || ""
+    campaignPacket: payload?.campaignPacket || null,
+    externalCampaignId: payload?.ddbCampaignId || "",
+    campaignName: payload?.ddbCampaignName || "",
+    dmExternalUserId: payload?.dmExternalUserId || "",
+    isDm: payload?.isDm || false
   });
 
-  if (!guestLoginResult?.ok) {
-    return;
+  if (!loginResult?.ok) return;
+
+  const campaignId = loginResult.user?.campaignId
+    || preflightResult.invite?.campaign?.id;
+  if (campaignId) {
+    await syncCharacterAndCampaign(server, loginResult.token, campaignId, payload);
   }
 
-  browser.tabs.create({
-    url: `${baseServerUrl(server.url)}/join/${encodeURIComponent(context.inviteCode)}`
-  });
+  await launchTab(server, context.inviteCode);
 }
-

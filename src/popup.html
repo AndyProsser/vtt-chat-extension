@@ -1,130 +1,255 @@
-
 <!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <title>VTT‑Chat Connector</title>
     <style>
+      * { box-sizing: border-box; }
       body {
         font-family: system-ui, sans-serif;
         font-size: 13px;
-        margin: 10px;
+        margin: 0;
         min-width: 320px;
+        background: #1a1a2e;
+        color: #e0e0e0;
       }
-      .section { margin-bottom: 12px; }
-      .server { display: flex; align-items: center; margin-bottom: 4px; }
-      .server input[type="radio"] { margin-right: 6px; }
-      label {
-        display: block;
+
+      .header {
+        background: #c53131;
+        padding: 10px 14px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .header-title {
+        font-weight: 700;
+        font-size: 14px;
+        color: #fff;
+        letter-spacing: 0.5px;
+      }
+      .header-logo {
+        width: 20px;
+        height: 20px;
+        fill: #fff;
+      }
+
+      .body { padding: 12px 14px; }
+
+      /* User bar */
+      .user-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px;
+        background: #16213e;
+        border-radius: 6px;
+        margin-bottom: 12px;
+      }
+      .user-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        object-fit: cover;
+        background: #333;
+        flex-shrink: 0;
+      }
+      .user-avatar-placeholder {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: #444;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #888;
+        font-size: 16px;
+      }
+      .user-info { flex: 1; min-width: 0; }
+      .user-name {
+        font-weight: 600;
+        color: #fff;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .user-sub { color: #888; font-size: 11px; }
+
+      /* Sections */
+      .section { margin-bottom: 14px; }
+      .section-label {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: #888;
         margin-bottom: 6px;
       }
-      input {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 6px 8px;
-        border: 1px solid #b8b8b8;
-        border-radius: 4px;
-      }
-      .grid {
-        display: grid;
+
+      /* Server list */
+      .server-list { display: flex; flex-direction: column; gap: 4px; }
+      .server-row {
+        display: flex;
+        align-items: center;
         gap: 8px;
+        padding: 6px 8px;
+        background: #16213e;
+        border-radius: 4px;
+        cursor: pointer;
       }
+      .server-row input[type="radio"] { accent-color: #c53131; margin: 0; }
+      .server-row-name { font-weight: 600; color: #ddd; }
+      .server-row-url { font-size: 11px; color: #666; }
+
+      /* Inputs */
+      label { display: block; color: #aaa; font-size: 11px; margin-bottom: 4px; }
+      input, select {
+        width: 100%;
+        padding: 7px 9px;
+        border: 1px solid #333;
+        border-radius: 4px;
+        background: #16213e;
+        color: #e0e0e0;
+        font-size: 13px;
+        outline: none;
+      }
+      input:focus, select:focus { border-color: #c53131; }
+      select option { background: #16213e; }
+
+      /* Buttons */
       button {
-        background: #c53131;
-        color: #fff;
         border: none;
         border-radius: 4px;
-        padding: 6px 10px;
+        padding: 8px 12px;
         cursor: pointer;
         font-weight: 600;
+        font-size: 13px;
+        transition: opacity 0.15s;
       }
-      button.secondary { background: #444; }
-      button:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-      .muted {
-        color: #555;
-      }
-      .status {
-        border: 1px solid #d3d3d3;
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .btn-primary { background: #c53131; color: #fff; width: 100%; }
+      .btn-secondary { background: #2a2a4a; color: #ccc; }
+      .btn-small { padding: 5px 9px; font-size: 11px; }
+      .btn-row { display: flex; gap: 6px; align-items: center; }
+
+      /* Status */
+      .status-box {
+        padding: 8px 10px;
         border-radius: 4px;
-        padding: 8px;
-        background: #f7f7f7;
+        font-size: 12px;
+        line-height: 1.4;
+        background: #16213e;
+        color: #aaa;
+        border: 1px solid #333;
       }
-      .error {
-        border-color: #cf4a4a;
-        background: #fff0f0;
-        color: #9f2121;
+      .status-box.ok    { border-color: #2d6e35; background: #0d2e14; color: #6fbf7a; }
+      .status-box.error { border-color: #6e2d2d; background: #2e0d0d; color: #bf6f6f; }
+      .status-box.info  { border-color: #2d4e6e; background: #0d1e2e; color: #6fa3bf; }
+
+      /* Password section */
+      #password-section {
+        background: #16213e;
+        border: 1px solid #333;
+        border-radius: 6px;
+        padding: 10px;
+        margin-bottom: 14px;
       }
-      .ok {
-        border-color: #5b9d65;
-        background: #effaf1;
+      #password-section .section-label { margin-bottom: 8px; }
+
+      /* Divider */
+      .divider {
+        border: none;
+        border-top: 1px solid #2a2a3a;
+        margin: 10px 0;
+      }
+
+      /* Character card */
+      .char-card {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 0;
+      }
+      .char-card img {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        object-fit: cover;
+        background: #333;
       }
     </style>
   </head>
   <body>
-    <div class="section">
-      <strong>Servers</strong>
-      <div id="servers"></div>
-      <button id="add-server">Add Server</button>
+    <div class="header">
+      <svg class="header-logo" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10z"/>
+      </svg>
+      <span class="header-title">VTT‑Chat Connector</span>
     </div>
 
-    <div class="section">
-      <button id="relaunch" class="secondary">Reopen Last Session</button>
-    </div>
+    <div class="body">
 
-    <div class="section">
-      <strong>Stage 13.4 Pre-flight</strong>
-      <div class="grid" style="margin-top: 8px;">
+      <!-- DDB User -->
+      <div class="user-bar" id="user-bar">
+        <div class="user-avatar-placeholder" id="user-avatar-placeholder">?</div>
+        <img class="user-avatar" id="user-avatar" style="display:none" src="" alt="avatar" />
+        <div class="user-info">
+          <div class="user-name" id="user-name">Not logged in to D&amp;D Beyond</div>
+          <div class="user-sub" id="user-sub">Open a D&amp;D Beyond page first</div>
+        </div>
+      </div>
+
+      <!-- Server -->
+      <div class="section">
+        <div class="section-label">Server</div>
+        <div class="server-list" id="servers"></div>
+        <div class="btn-row" style="margin-top: 6px;">
+          <button class="btn-secondary btn-small" id="add-server">+ Add Server</button>
+          <button class="btn-secondary btn-small" id="remove-server">Remove</button>
+        </div>
+      </div>
+
+      <hr class="divider" />
+
+      <!-- Join -->
+      <div class="section">
+        <div class="section-label">Join Campaign</div>
         <label>
           Invite code
-          <input id="invite-code" type="text" placeholder="Player invite code" />
+          <input id="invite-code" type="text" placeholder="Paste invite code from DM" />
         </label>
-        <label>
-          Email
-          <input id="email" type="email" placeholder="you@example.com" />
+        <label style="margin-top: 8px;">
+          Character
+          <select id="character-select">
+            <option value="">— select a character —</option>
+          </select>
         </label>
-        <label>
-          External user ID
-          <input id="external-user-id" type="text" placeholder="D&D Beyond user id" />
-        </label>
+        <button class="btn-primary" id="connect-launch" style="margin-top: 10px;">
+          Connect &amp; Launch
+        </button>
       </div>
-      <button id="run-preflight" style="margin-top: 8px;">Run Pre-flight</button>
-      <div id="preflight-status" class="status muted" style="margin-top: 8px;">
-        Run pre-flight to check platform status and invite validity.
-      </div>
-    </div>
 
-    <div class="section" id="guest-login-section" style="display: none;">
-      <strong>Guest Join</strong>
-      <p class="muted">Joins with guest auth and stores a renewable token in extension memory.</p>
-      <button id="guest-login">Continue As Guest</button>
-    </div>
-
-    <div class="section" id="full-login-section" style="display: none;">
-      <strong>Full Account Login</strong>
-      <p class="muted">This branch is shown when pre-flight reports an existing full account.</p>
-      <div class="grid">
-        <label>
-          Email
-          <input id="login-email" type="email" readonly />
-        </label>
+      <!-- Password (hidden until preflight says existing full account) -->
+      <div id="password-section" style="display:none;">
+        <div class="section-label">Account Login Required</div>
         <label>
           Password
-          <input id="login-password" type="password" placeholder="Enter password" />
+          <input id="login-password" type="password" placeholder="Your VTT-Chat password" />
         </label>
+        <button class="btn-primary" id="launch-with-password" style="margin-top: 8px;">
+          Login &amp; Launch
+        </button>
       </div>
-      <button id="full-login" style="margin-top: 8px;">Log In</button>
-    </div>
 
-    <div class="section">
-      <strong>Auth State</strong>
-      <div id="auth-state" class="status muted" style="margin-top: 8px;">
-        No in-memory token
-      </div>
-    </div>
+      <!-- Status -->
+      <div id="status" class="status-box" style="margin-bottom: 10px; display:none;"></div>
 
+      <hr class="divider" />
+
+      <!-- Relaunch -->
+      <button class="btn-secondary" id="relaunch" style="width:100%;">Reopen Last Session</button>
+
+    </div>
     <script src="popup.js"></script>
   </body>
 </html>

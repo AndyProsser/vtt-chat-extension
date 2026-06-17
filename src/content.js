@@ -189,7 +189,70 @@ function buildCampaignPacket(details) {
 }
 
 //
-// 3. CAMPAIGN API SUPPORT
+// 3. CHARACTER DETAIL + STATS EXTRACTION
+//
+async function fetchCharacterDetails(characterId) {
+  const headers = await buildAuthHeaders();
+  if (!headers.Authorization) return null;
+  const url = `https://character-service.dndbeyond.com/character/v5/character/${characterId}?includeCustomItems=true`;
+  const res = await fetch(url, { method: "GET", headers });
+  if (!res.ok) return null;
+  const json = await res.json();
+  return json.data || null;
+}
+
+const DDB_STAT_KEYS = { 1: "str", 2: "dex", 3: "con", 4: "int", 5: "wis", 6: "cha" };
+
+function extractCharacterStats(data) {
+  if (!data) return null;
+
+  const abilityScores = {};
+  for (const stat of (data.stats || [])) {
+    const key = DDB_STAT_KEYS[stat.id];
+    if (key && stat.value != null) abilityScores[key] = stat.value;
+  }
+
+  const totalLevel = (data.classes || []).reduce((sum, cls) => sum + (cls.level || 0), 0);
+  const proficiencyBonus = totalLevel > 0 ? Math.floor((totalLevel - 1) / 4) + 2 : 2;
+
+  const baseHp = data.baseHitPoints || 0;
+  const bonusHp = data.bonusHitPoints || 0;
+  const removedHp = data.removedHitPoints || 0;
+  const maxHp = baseHp + bonusHp;
+  const currentHp = Math.max(0, maxHp - removedHp);
+  const tempHp = data.temporaryHitPoints || 0;
+
+  const speed = data.race?.weightSpeeds?.normal?.walk || 30;
+
+  return {
+    hp: { current: currentHp, max: maxHp, temp: tempHp },
+    proficiencyBonus,
+    speed,
+    abilityScores: Object.keys(abilityScores).length > 0 ? abilityScores : undefined
+  };
+}
+
+function buildFullCharacterPayload(listChar, detailData) {
+  const subclass = detailData?.classes?.[0]?.subclassDefinition?.name || null;
+  const race = detailData?.race?.fullName || listChar.race || null;
+  const stats = extractCharacterStats(detailData);
+
+  return {
+    ddbCharacterId: listChar.id,
+    externalCharacterId: String(listChar.id),
+    name: listChar.name,
+    race,
+    class: listChar.class || null,
+    subclass,
+    level: listChar.level,
+    avatarUrl: listChar.avatar || detailData?.avatarUrl || null,
+    characterUrl: `https://www.dndbeyond.com/characters/${listChar.id}`,
+    stats: stats || undefined
+  };
+}
+
+//
+// 4. CAMPAIGN API SUPPORT
 //
 async function fetchCampaignDetails(campaignId) {
   const headers = await buildAuthHeaders();
@@ -204,7 +267,7 @@ async function fetchCampaignDetails(campaignId) {
 }
 
 //
-// 4. PAGE HELPERS
+// 5. PAGE HELPERS
 //
 function isCharacterPage() {
   return /\/characters\/\d+/.test(location.pathname);
@@ -229,7 +292,7 @@ async function isOwnedCharacterPage() {
 }
 
 //
-// 5. BUTTON INJECTION
+// 6. BUTTON INJECTION
 //
 function injectLaunchButton(targetEl) {
   if (!targetEl) {
@@ -321,7 +384,7 @@ function injectLaunchButton(targetEl) {
 }
 
 //
-// 6. LAUNCH HANDLER
+// 7. LAUNCH HANDLER
 //
 async function onLaunchClick() {
   console.log("[VTT-Chat] Launch button clicked");
@@ -368,26 +431,22 @@ async function onLaunchClick() {
     payload.ddbCampaignId = String(char.campaignId || "");
     payload.ddbCampaignName = char.campaignName || "Campaign";
     payload.isDm = false;
-    payload.character = {
-      ddbCharacterId: char.id,
-      name: char.name,
-      avatarUrl: char.avatar,
-      race: char.race,
-      className: char.class,
-      level: char.level
-    };
 
     activeContext.externalCampaignId = payload.ddbCampaignId;
     activeContext.campaignName = payload.ddbCampaignName;
 
-    if (char.campaignId) {
-      const details = await fetchCampaignDetails(char.campaignId);
-      if (details) {
-        payload.dmExternalUserId = String(details.dmId || "");
-        payload.campaignPacket = buildCampaignPacket(details);
-        activeContext.dmExternalUserId = String(details.dmId || "");
-        activeContext.members = normalizeCampaignMembers(details);
-      }
+    const [campaignDetails, charDetail] = await Promise.all([
+      char.campaignId ? fetchCampaignDetails(char.campaignId) : Promise.resolve(null),
+      fetchCharacterDetails(char.id)
+    ]);
+
+    payload.character = buildFullCharacterPayload(char, charDetail);
+
+    if (campaignDetails) {
+      payload.dmExternalUserId = String(campaignDetails.dmId || "");
+      payload.campaignPacket = buildCampaignPacket(campaignDetails);
+      activeContext.dmExternalUserId = String(campaignDetails.dmId || "");
+      activeContext.members = normalizeCampaignMembers(campaignDetails);
     }
 
     console.log("[VTT-Chat] Character payload prepared:", payload.character.name);
@@ -419,14 +478,17 @@ async function onLaunchClick() {
         c => Number(c.userId) === Number(ddbUser.id)
       );
       if (userChar) {
-        payload.character = {
-          ddbCharacterId: userChar.id,
+        const charDetail = await fetchCharacterDetails(userChar.id);
+        const listChar = {
+          id: userChar.id,
           name: userChar.name,
-          avatarUrl: userChar.avatarUrl,
+          level: userChar.level || null,
           race: null,
-          className: null,
-          level: null
+          class: null,
+          avatar: userChar.avatarUrl || null,
+          campaignId: details.id
         };
+        payload.character = buildFullCharacterPayload(listChar, charDetail);
       }
     }
 
@@ -442,7 +504,7 @@ async function onLaunchClick() {
 }
 
 //
-// 7. CACHE + OBSERVER
+// 8. CACHE + OBSERVER
 //
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
