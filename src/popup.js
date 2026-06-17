@@ -305,6 +305,7 @@ async function initPopup() {
     browser.tabs.create({
       url: `${server.url.replace(/\/$/, "")}/join/${encodeURIComponent(code)}`
     });
+    window.close();
   });
 
   // ---------------------------------------------------------------------------
@@ -418,9 +419,7 @@ async function initPopup() {
     }
 
     showStatus("Connected! VTT-Chat is opening…", "ok");
-    launchPwBtn.disabled = false;
-    passwordSection.style.display = "none";
-    passwordInput.value = "";
+    setTimeout(() => window.close(), 800);
   });
 
   // ---------------------------------------------------------------------------
@@ -448,7 +447,7 @@ async function initPopup() {
     }
 
     showStatus(`Connected to "${campaignName}"! VTT-Chat is opening…`, "ok");
-    connectBtn.disabled = false;
+    setTimeout(() => window.close(), 800);
   }
 }
 
