@@ -42,6 +42,10 @@ browser.runtime.onMessage.addListener((msg) => {
     void handleCharacterUpdate(msg.payload || {});
     return;
   }
+
+  if (msg.type === "check-session-status") {
+    return checkSessionStatus(msg.payload || {});
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -57,7 +61,8 @@ async function getState() {
     ddbUser = null,
     ddbCharacterList = null,
     ddbActiveContext = null,
-    savedInviteCode = ""
+    savedInviteCode = "",
+    savedEmail = ""
   } = await browser.storage.local.get([
     "servers",
     "activeServerId",
@@ -66,9 +71,10 @@ async function getState() {
     "ddbUser",
     "ddbCharacterList",
     "ddbActiveContext",
-    "savedInviteCode"
+    "savedInviteCode",
+    "savedEmail"
   ]);
-  return { servers, activeServerId, lastSession, lastPreflight, ddbUser, ddbCharacterList, ddbActiveContext, savedInviteCode };
+  return { servers, activeServerId, lastSession, lastPreflight, ddbUser, ddbCharacterList, ddbActiveContext, savedInviteCode, savedEmail };
 }
 
 async function getActiveServer() {
@@ -289,7 +295,7 @@ function buildPopupContext(state, payload) {
   const ddbUser = state.ddbUser || {};
   const ddbActiveContext = state.ddbActiveContext || {};
   return {
-    email: payload.email || ddbUser.email || "",
+    email: payload.email || ddbUser.email || state.savedEmail || "",
     externalUserId: String(payload.externalUserId || ddbUser.id || "").trim(),
     displayName: payload.displayName || ddbUser.displayName || "",
     avatarUrl: payload.avatarUrl || ddbUser.avatarUrl || null,
@@ -576,10 +582,10 @@ async function runFullLoginForPopup(payload) {
 // Login-and-launch helpers (login + sync + open tab)
 // ---------------------------------------------------------------------------
 
-async function launchTab(server, inviteCode) {
-  browser.tabs.create({
-    url: `${baseServerUrl(server.url)}/join/${encodeURIComponent(inviteCode)}`
-  });
+async function launchTab(server, inviteCode, token) {
+  const base = `${baseServerUrl(server.url)}/join/${encodeURIComponent(inviteCode)}`;
+  const url = token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  browser.tabs.create({ url });
 }
 
 async function runGuestLoginAndLaunch(payload) {
@@ -594,7 +600,7 @@ async function runGuestLoginAndLaunch(payload) {
     await syncCharacterAndCampaign(server, loginResult.token, campaignId, payload);
   }
 
-  await launchTab(server, payload.inviteCode || "");
+  await launchTab(server, payload.inviteCode || "", loginResult.token);
   return loginResult;
 }
 
@@ -614,7 +620,7 @@ async function runFullLoginAndLaunch(payload) {
     });
   }
 
-  await launchTab(server, payload.inviteCode || "");
+  await launchTab(server, payload.inviteCode || "", loginResult.token);
   return loginResult;
 }
 
@@ -666,6 +672,42 @@ async function handleCharacterUpdate(payload) {
 }
 
 // ---------------------------------------------------------------------------
+// Session status check (popup polling)
+// ---------------------------------------------------------------------------
+
+async function checkSessionStatus({ serverUrl, inviteCode }) {
+  if (!serverUrl) return { ok: false, serverOnline: false };
+  const base = String(serverUrl).replace(/\/$/, "");
+  try {
+    const platformRes = await fetch(`${base}/api/platform/status`);
+    if (!platformRes.ok) return { ok: false, serverOnline: false };
+    const platform = await platformRes.json().catch(() => ({}));
+    if (!platform.online) return { ok: false, serverOnline: false };
+
+    // Attempt per-campaign session status (endpoint may not exist yet)
+    if (inviteCode) {
+      try {
+        const sessRes = await fetch(
+          `${base}/api/campaigns/invite/${encodeURIComponent(inviteCode)}/session-status`
+        );
+        if (sessRes.ok) {
+          const sess = await sessRes.json().catch(() => ({}));
+          return {
+            ok: true, serverOnline: true,
+            active: sess.active ?? Boolean(sess.playerCount > 0),
+            playerCount: sess.playerCount ?? null
+          };
+        }
+      } catch { /* endpoint not yet available — fall through */ }
+    }
+
+    return { ok: true, serverOnline: true, active: false };
+  } catch {
+    return { ok: false, serverOnline: false };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Connect (triggered by content script inject button)
 // ---------------------------------------------------------------------------
 
@@ -708,7 +750,7 @@ async function handleConnect(payload) {
     if (token && campaignId) {
       await syncCharacterAndCampaign(server, token, campaignId, payload);
     }
-    await launchTab(server, context.inviteCode);
+    await launchTab(server, context.inviteCode, token);
     return;
   }
 
@@ -737,5 +779,5 @@ async function handleConnect(payload) {
     await syncCharacterAndCampaign(server, loginResult.token, campaignId, payload);
   }
 
-  await launchTab(server, context.inviteCode);
+  await launchTab(server, context.inviteCode, loginResult.token);
 }

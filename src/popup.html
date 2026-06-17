@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <title>VTT‑Chat Connector</title>
     <style>
-      * { box-sizing: border-box; }
+      *, *::before, *::after { box-sizing: border-box; }
       body {
         font-family: system-ui, sans-serif;
         font-size: 13px;
@@ -15,6 +15,7 @@
         color: #e0e0e0;
       }
 
+      /* ── header ── */
       .header {
         background: #c53131;
         padding: 10px 14px;
@@ -22,121 +23,182 @@
         align-items: center;
         gap: 10px;
       }
-      .header-title {
-        font-weight: 700;
-        font-size: 14px;
-        color: #fff;
-        letter-spacing: 0.5px;
-      }
-      .header-logo { width: 20px; height: 20px; fill: #fff; }
+      .header-title { font-weight: 700; font-size: 14px; color: #fff; letter-spacing: 0.5px; }
+      .header-logo  { width: 20px; height: 20px; fill: #fff; flex-shrink: 0; }
 
+      /* ── body ── */
       .body { padding: 12px 14px; }
 
-      /* User bar */
+      /* ── user bar ── */
       .user-bar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 8px 10px;
-        background: #16213e;
-        border-radius: 6px;
-        margin-bottom: 12px;
+        display: flex; align-items: center; gap: 10px;
+        padding: 8px 10px; background: #16213e; border-radius: 6px;
+        margin-bottom: 0; cursor: pointer; user-select: none;
+        transition: background 0.12s;
       }
-      .user-avatar {
-        width: 32px; height: 32px;
-        border-radius: 50%; object-fit: cover;
-        background: #333; flex-shrink: 0;
+      .user-bar:hover { background: #1c2a52; }
+      .user-bar.no-user { cursor: default; }
+      .user-bar.no-user:hover { background: #16213e; }
+
+      .user-avatar-img  {
+        width: 32px; height: 32px; border-radius: 50%;
+        object-fit: cover; flex-shrink: 0; display: none;
       }
-      .user-avatar-placeholder {
-        width: 32px; height: 32px;
-        border-radius: 50%; background: #444;
-        flex-shrink: 0; display: flex;
-        align-items: center; justify-content: center;
-        color: #888; font-size: 16px;
+      .user-avatar-init {
+        width: 32px; height: 32px; border-radius: 50%;
+        background: #444; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        color: #888; font-size: 16px; font-weight: 700;
       }
       .user-info { flex: 1; min-width: 0; }
       .user-name { font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .user-sub  { color: #888; font-size: 11px; }
+      .user-sub  { color: #888; font-size: 11px; margin-top: 1px; }
+      .user-chevron { color: #555; font-size: 10px; flex-shrink: 0; transition: transform 0.15s; display: none; }
+      .user-chevron.open { transform: rotate(180deg); }
 
-      /* Section */
-      .section { margin-bottom: 14px; }
+      /* ── email section (slides below user bar) ── */
+      .email-section {
+        background: #0d1220; border: 1px solid #2a2a4a;
+        border-top: none; border-radius: 0 0 6px 6px;
+        padding: 8px 10px; margin-bottom: 10px;
+      }
+      .email-hint { font-size: 10px; color: #555; margin-top: 3px; }
+
+      /* ── inputs ── */
+      label { display: block; color: #aaa; font-size: 11px; margin-bottom: 2px; }
+      input[type="url"],
+      input[type="email"],
+      input[type="password"] {
+        width: 100%; padding: 7px 9px;
+        border: 1px solid #333; border-radius: 4px;
+        background: #0d1220; color: #e0e0e0;
+        font-size: 13px; outline: none; display: block;
+      }
+      input:focus { border-color: #c53131; }
+
+      /* ── section label ── */
       .section-label {
         font-size: 10px; font-weight: 700;
         text-transform: uppercase; letter-spacing: 0.8px;
-        color: #888; margin-bottom: 6px;
+        color: #666; margin-bottom: 6px;
       }
 
-      /* Inputs */
-      label { display: block; color: #aaa; font-size: 11px; margin-bottom: 4px; }
-      input, select {
-        width: 100%; padding: 7px 9px;
-        border: 1px solid #333; border-radius: 4px;
-        background: #16213e; color: #e0e0e0;
-        font-size: 13px; outline: none;
-      }
-      input:focus, select:focus { border-color: #c53131; }
-      select option { background: #16213e; }
+      /* ── character list ── */
+      #character-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
 
-      /* URL parse preview */
-      .url-preview {
-        margin-top: 5px; padding: 5px 8px;
-        border-radius: 4px; font-size: 11px;
-        border: 1px solid transparent;
+      /* ── character card ── */
+      .char-card {
+        display: flex; align-items: center; gap: 10px;
+        padding: 9px 10px; background: #16213e; border-radius: 6px;
+        cursor: pointer; border: 1px solid transparent;
+        transition: background 0.12s, border-color 0.12s;
+      }
+      .char-card:hover   { background: #1c2a52; border-color: #2a3a5a; }
+      .char-card.selected { border-color: #c53131; background: #1e1422; border-radius: 6px 6px 0 0; }
+      .char-card.launching { opacity: 0.65; cursor: wait; pointer-events: none; }
+
+      .char-avatar {
+        width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        font-weight: 700; font-size: 16px; color: #fff; overflow: hidden;
+      }
+      .char-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+      .char-info { flex: 1; min-width: 0; }
+      .char-name     { font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .char-detail   { font-size: 11px; color: #888; margin-top: 1px; }
+      .char-campaign { font-size: 10px; color: #5a9abf; margin-top: 2px; }
+
+      .char-right { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+      .char-edit-btn {
+        background: none; border: none; padding: 2px 4px; cursor: pointer;
+        font-size: 13px; color: #444; border-radius: 3px;
+        opacity: 0; transition: opacity 0.12s, color 0.12s;
+      }
+      .char-card:hover .char-edit-btn { opacity: 1; }
+      .char-edit-btn:hover { color: #aaa !important; }
+
+      /* ── status dots ── */
+      .status-dot {
+        width: 8px; height: 8px; border-radius: 50%; cursor: help; flex-shrink: 0;
+      }
+      .status-dot.none    { background: #3a3a4a; }
+      .status-dot.saved   { background: #c5a231; }
+      .status-dot.active  { background: #2d8a5e; }
+      .status-dot.offline { background: #7a2d2d; }
+      .status-dot.checking {
+        background: #c5a231;
+        animation: dpulse 1s ease-in-out infinite;
+      }
+      @keyframes dpulse { 0%,100% { opacity:1; } 50% { opacity:.25; } }
+
+      /* ── expand form (join / password) ── */
+      .char-expand-form {
+        background: #0d1220;
+        border: 1px solid #c53131; border-top: none;
+        border-radius: 0 0 6px 6px;
+        padding: 10px 10px 12px;
+        margin-bottom: 2px;
         display: none;
+      }
+      .char-expand-form.open { display: block; }
+
+      .url-preview {
+        margin-top: 4px; padding: 4px 8px; border-radius: 4px;
+        font-size: 11px; border: 1px solid transparent; display: none;
       }
       .url-preview.ok    { display: block; background: #0d2e14; border-color: #2d6e35; color: #6fbf7a; }
       .url-preview.error { display: block; background: #2e0d0d; border-color: #6e2d2d; color: #bf6f6f; }
 
-      /* Buttons */
+      /* ── buttons ── */
       button {
-        border: none; border-radius: 4px;
-        padding: 8px 12px; cursor: pointer;
-        font-weight: 600; font-size: 13px;
-        transition: opacity 0.15s;
+        border: none; border-radius: 4px; padding: 7px 12px;
+        cursor: pointer; font-weight: 600; font-size: 12px;
+        transition: opacity 0.12s;
       }
-      button:disabled { opacity: 0.45; cursor: not-allowed; }
-      .btn-primary  { background: #c53131; color: #fff; width: 100%; }
-      .btn-secondary{ background: #2a2a4a; color: #ccc; }
-      .btn-small    { padding: 5px 9px; font-size: 11px; }
-      .btn-row      { display: flex; gap: 6px; align-items: center; }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+      .btn-primary   { background: #c53131; color: #fff; width: 100%; font-size: 13px; padding: 8px 12px; }
+      .btn-secondary { background: #2a2a4a; color: #ccc; width: 100%; }
+      .mt6 { margin-top: 6px; }
+      .mt8 { margin-top: 8px; }
 
-      /* Status */
+      /* ── status box ── */
       .status-box {
-        padding: 8px 10px; border-radius: 4px;
-        font-size: 12px; line-height: 1.4;
-        background: #16213e; color: #aaa;
-        border: 1px solid #333;
+        padding: 7px 10px; border-radius: 4px; font-size: 12px; line-height: 1.4;
+        background: #16213e; color: #aaa; border: 1px solid #333;
+        margin-bottom: 8px;
       }
       .status-box.ok    { border-color: #2d6e35; background: #0d2e14; color: #6fbf7a; }
       .status-box.error { border-color: #6e2d2d; background: #2e0d0d; color: #bf6f6f; }
       .status-box.info  { border-color: #2d4e6e; background: #0d1e2e; color: #6fa3bf; }
 
-      /* Password section */
-      #password-section {
-        background: #16213e; border: 1px solid #333;
-        border-radius: 6px; padding: 10px; margin-bottom: 14px;
-      }
+      /* ── divider ── */
+      .divider { border: none; border-top: 1px solid #2a2a3a; margin: 8px 0; }
 
-      /* Managed servers (secondary) */
-      details { margin-top: 4px; }
+      /* ── campaign connections (collapsible) ── */
+      details { margin-top: 2px; }
       summary {
-        font-size: 11px; color: #666; cursor: pointer;
-        list-style: none; padding: 4px 0;
+        font-size: 11px; color: #555; cursor: pointer;
+        list-style: none; padding: 4px 0; user-select: none;
       }
       summary::-webkit-details-marker { display: none; }
       summary::before { content: "▶ "; font-size: 9px; }
       details[open] summary::before { content: "▼ "; }
-      .server-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-      .server-row {
-        display: flex; align-items: center; gap: 8px;
-        padding: 5px 8px; background: #16213e; border-radius: 4px; cursor: pointer;
-      }
-      .server-row input[type="radio"] { accent-color: #c53131; margin: 0; }
-      .server-row-name { font-weight: 600; color: #ddd; font-size: 12px; }
-      .server-row-url  { font-size: 10px; color: #666; }
 
-      /* Divider */
-      .divider { border: none; border-top: 1px solid #2a2a3a; margin: 10px 0; }
+      .conn-list { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+      .conn-row {
+        display: flex; align-items: center; gap: 8px;
+        padding: 5px 8px; background: #16213e; border-radius: 4px; font-size: 11px;
+      }
+      .conn-row-info  { flex: 1; min-width: 0; }
+      .conn-row-name  { font-weight: 600; color: #ddd; }
+      .conn-row-url   { color: #555; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .conn-del {
+        color: #6e2d2d; cursor: pointer; font-size: 13px;
+        padding: 2px 4px; border: none; background: none; border-radius: 3px;
+        transition: color 0.12s;
+      }
+      .conn-del:hover { color: #cf4a4a; }
     </style>
   </head>
   <body>
@@ -149,80 +211,44 @@
 
     <div class="body">
 
-      <!-- DDB user -->
-      <div class="user-bar">
-        <div class="user-avatar-placeholder" id="user-avatar-placeholder">?</div>
-        <img class="user-avatar" id="user-avatar" style="display:none" src="" alt="avatar" />
+      <!-- User identity bar -->
+      <div class="user-bar no-user" id="user-bar" title="Click to edit email">
+        <div class="user-avatar-init" id="user-avatar-init">?</div>
+        <img class="user-avatar-img" id="user-avatar-img" src="" alt="" />
         <div class="user-info">
-          <div class="user-name" id="user-name">Not logged in to D&amp;D Beyond</div>
+          <div class="user-name" id="user-name">Not signed in to D&amp;D Beyond</div>
           <div class="user-sub"  id="user-sub">Open a D&amp;D Beyond page first</div>
         </div>
+        <span class="user-chevron" id="user-chevron">▼</span>
       </div>
 
-      <!-- Email fallback (shown when DDB doesn't expose it) -->
-      <div id="email-section" style="display:none; margin-bottom:12px;">
-        <label style="color:#aaa; font-size:11px;">
+      <!-- Collapsible email section -->
+      <div class="email-section" id="email-section" style="display:none">
+        <label>
           Email
-          <input id="user-email" type="email" placeholder="you@example.com" />
+          <input id="user-email" type="email" placeholder="you@example.com" autocomplete="email" />
         </label>
-        <div style="font-size:10px; color:#666; margin-top:3px;">
-          D&amp;D Beyond didn't share your email — enter it once to enable account matching.
-        </div>
+        <div class="email-hint">Used for account matching on the VTT-Chat server.</div>
       </div>
 
-      <!-- Invite URL — primary entry point -->
-      <div class="section">
-        <div class="section-label">Invite URL</div>
-        <label>
-          Paste the invite link your DM sent you
-          <input id="invite-url" type="url" placeholder="https://vtt.example.com/join/ABC123" autocomplete="off" />
-        </label>
-        <div class="url-preview" id="url-preview"></div>
-      </div>
+      <!-- Character list -->
+      <div class="section-label" style="margin-top:12px;">Characters</div>
+      <div id="character-list"></div>
 
-      <!-- Character -->
-      <div class="section">
-        <div class="section-label">Character</div>
-        <label>
-          Which character are you playing?
-          <select id="character-select">
-            <option value="">— select a character —</option>
-          </select>
-        </label>
-      </div>
-
-      <!-- Main action -->
-      <button class="btn-primary" id="connect-launch">Connect &amp; Launch</button>
-
-      <!-- Password (shown when existing full account detected) -->
-      <div id="password-section" style="display:none; margin-top:12px;">
-        <div class="section-label">Account Login Required</div>
-        <label style="margin-top:4px;">
-          Password
-          <input id="login-password" type="password" placeholder="Your VTT-Chat password" />
-        </label>
-        <button class="btn-primary" id="launch-with-password" style="margin-top: 8px;">
-          Login &amp; Launch
-        </button>
-      </div>
-
-      <!-- Status -->
-      <div id="status" class="status-box" style="margin-top:10px; display:none;"></div>
+      <!-- Status message -->
+      <div id="status" class="status-box" style="display:none;"></div>
 
       <hr class="divider" />
 
-      <!-- Relaunch -->
-      <button class="btn-secondary" id="relaunch" style="width:100%; margin-bottom:10px;">
+      <!-- Reopen last session -->
+      <button class="btn-secondary" id="relaunch" disabled style="margin-bottom:8px;">
         Reopen Last Session
       </button>
 
-      <!-- Managed servers (secondary — collapsed by default) -->
-      <details>
-        <summary>Manage saved servers</summary>
-        <div class="server-list" id="servers"></div>
-        <div class="btn-row" style="margin-top: 6px;">
-          <button class="btn-secondary btn-small" id="remove-server">Remove selected</button>
-        </div>
+      <!-- Campaign Connections -->
+      <details id="connections-details">
+        <summary>Campaign Connections</summary>
+        <div class="conn-list" id="conn-list"></div>
       </details>
 
     </div>
