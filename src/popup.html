@@ -27,11 +27,7 @@
         color: #fff;
         letter-spacing: 0.5px;
       }
-      .header-logo {
-        width: 20px;
-        height: 20px;
-        fill: #fff;
-      }
+      .header-logo { width: 20px; height: 20px; fill: #fff; }
 
       .body { padding: 12px 14px; }
 
@@ -46,100 +42,68 @@
         margin-bottom: 12px;
       }
       .user-avatar {
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        object-fit: cover;
-        background: #333;
-        flex-shrink: 0;
+        width: 32px; height: 32px;
+        border-radius: 50%; object-fit: cover;
+        background: #333; flex-shrink: 0;
       }
       .user-avatar-placeholder {
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        background: #444;
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: #888;
-        font-size: 16px;
+        width: 32px; height: 32px;
+        border-radius: 50%; background: #444;
+        flex-shrink: 0; display: flex;
+        align-items: center; justify-content: center;
+        color: #888; font-size: 16px;
       }
       .user-info { flex: 1; min-width: 0; }
-      .user-name {
-        font-weight: 600;
-        color: #fff;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .user-sub { color: #888; font-size: 11px; }
+      .user-name { font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .user-sub  { color: #888; font-size: 11px; }
 
-      /* Sections */
+      /* Section */
       .section { margin-bottom: 14px; }
       .section-label {
-        font-size: 10px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        color: #888;
-        margin-bottom: 6px;
+        font-size: 10px; font-weight: 700;
+        text-transform: uppercase; letter-spacing: 0.8px;
+        color: #888; margin-bottom: 6px;
       }
-
-      /* Server list */
-      .server-list { display: flex; flex-direction: column; gap: 4px; }
-      .server-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 8px;
-        background: #16213e;
-        border-radius: 4px;
-        cursor: pointer;
-      }
-      .server-row input[type="radio"] { accent-color: #c53131; margin: 0; }
-      .server-row-name { font-weight: 600; color: #ddd; }
-      .server-row-url { font-size: 11px; color: #666; }
 
       /* Inputs */
       label { display: block; color: #aaa; font-size: 11px; margin-bottom: 4px; }
       input, select {
-        width: 100%;
-        padding: 7px 9px;
-        border: 1px solid #333;
-        border-radius: 4px;
-        background: #16213e;
-        color: #e0e0e0;
-        font-size: 13px;
-        outline: none;
+        width: 100%; padding: 7px 9px;
+        border: 1px solid #333; border-radius: 4px;
+        background: #16213e; color: #e0e0e0;
+        font-size: 13px; outline: none;
       }
       input:focus, select:focus { border-color: #c53131; }
       select option { background: #16213e; }
 
+      /* URL parse preview */
+      .url-preview {
+        margin-top: 5px; padding: 5px 8px;
+        border-radius: 4px; font-size: 11px;
+        border: 1px solid transparent;
+        display: none;
+      }
+      .url-preview.ok    { display: block; background: #0d2e14; border-color: #2d6e35; color: #6fbf7a; }
+      .url-preview.error { display: block; background: #2e0d0d; border-color: #6e2d2d; color: #bf6f6f; }
+
       /* Buttons */
       button {
-        border: none;
-        border-radius: 4px;
-        padding: 8px 12px;
-        cursor: pointer;
-        font-weight: 600;
-        font-size: 13px;
+        border: none; border-radius: 4px;
+        padding: 8px 12px; cursor: pointer;
+        font-weight: 600; font-size: 13px;
         transition: opacity 0.15s;
       }
       button:disabled { opacity: 0.45; cursor: not-allowed; }
-      .btn-primary { background: #c53131; color: #fff; width: 100%; }
-      .btn-secondary { background: #2a2a4a; color: #ccc; }
-      .btn-small { padding: 5px 9px; font-size: 11px; }
-      .btn-row { display: flex; gap: 6px; align-items: center; }
+      .btn-primary  { background: #c53131; color: #fff; width: 100%; }
+      .btn-secondary{ background: #2a2a4a; color: #ccc; }
+      .btn-small    { padding: 5px 9px; font-size: 11px; }
+      .btn-row      { display: flex; gap: 6px; align-items: center; }
 
       /* Status */
       .status-box {
-        padding: 8px 10px;
-        border-radius: 4px;
-        font-size: 12px;
-        line-height: 1.4;
-        background: #16213e;
-        color: #aaa;
+        padding: 8px 10px; border-radius: 4px;
+        font-size: 12px; line-height: 1.4;
+        background: #16213e; color: #aaa;
         border: 1px solid #333;
       }
       .status-box.ok    { border-color: #2d6e35; background: #0d2e14; color: #6fbf7a; }
@@ -148,35 +112,30 @@
 
       /* Password section */
       #password-section {
-        background: #16213e;
-        border: 1px solid #333;
-        border-radius: 6px;
-        padding: 10px;
-        margin-bottom: 14px;
+        background: #16213e; border: 1px solid #333;
+        border-radius: 6px; padding: 10px; margin-bottom: 14px;
       }
-      #password-section .section-label { margin-bottom: 8px; }
+
+      /* Managed servers (secondary) */
+      details { margin-top: 4px; }
+      summary {
+        font-size: 11px; color: #666; cursor: pointer;
+        list-style: none; padding: 4px 0;
+      }
+      summary::-webkit-details-marker { display: none; }
+      summary::before { content: "▶ "; font-size: 9px; }
+      details[open] summary::before { content: "▼ "; }
+      .server-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+      .server-row {
+        display: flex; align-items: center; gap: 8px;
+        padding: 5px 8px; background: #16213e; border-radius: 4px; cursor: pointer;
+      }
+      .server-row input[type="radio"] { accent-color: #c53131; margin: 0; }
+      .server-row-name { font-weight: 600; color: #ddd; font-size: 12px; }
+      .server-row-url  { font-size: 10px; color: #666; }
 
       /* Divider */
-      .divider {
-        border: none;
-        border-top: 1px solid #2a2a3a;
-        margin: 10px 0;
-      }
-
-      /* Character card */
-      .char-card {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 0;
-      }
-      .char-card img {
-        width: 20px;
-        height: 20px;
-        border-radius: 50%;
-        object-fit: cover;
-        background: #333;
-      }
+      .divider { border: none; border-top: 1px solid #2a2a3a; margin: 10px 0; }
     </style>
   </head>
   <body>
@@ -189,50 +148,55 @@
 
     <div class="body">
 
-      <!-- DDB User -->
-      <div class="user-bar" id="user-bar">
+      <!-- DDB user -->
+      <div class="user-bar">
         <div class="user-avatar-placeholder" id="user-avatar-placeholder">?</div>
         <img class="user-avatar" id="user-avatar" style="display:none" src="" alt="avatar" />
         <div class="user-info">
           <div class="user-name" id="user-name">Not logged in to D&amp;D Beyond</div>
-          <div class="user-sub" id="user-sub">Open a D&amp;D Beyond page first</div>
+          <div class="user-sub"  id="user-sub">Open a D&amp;D Beyond page first</div>
         </div>
       </div>
 
-      <!-- Server -->
-      <div class="section">
-        <div class="section-label">Server</div>
-        <div class="server-list" id="servers"></div>
-        <div class="btn-row" style="margin-top: 6px;">
-          <button class="btn-secondary btn-small" id="add-server">+ Add Server</button>
-          <button class="btn-secondary btn-small" id="remove-server">Remove</button>
-        </div>
-      </div>
-
-      <hr class="divider" />
-
-      <!-- Join -->
-      <div class="section">
-        <div class="section-label">Join Campaign</div>
-        <label>
-          Invite code
-          <input id="invite-code" type="text" placeholder="Paste invite code from DM" />
+      <!-- Email fallback (shown when DDB doesn't expose it) -->
+      <div id="email-section" style="display:none; margin-bottom:12px;">
+        <label style="color:#aaa; font-size:11px;">
+          Email
+          <input id="user-email" type="email" placeholder="you@example.com" />
         </label>
-        <label style="margin-top: 8px;">
-          Character
+        <div style="font-size:10px; color:#666; margin-top:3px;">
+          D&amp;D Beyond didn't share your email — enter it once to enable account matching.
+        </div>
+      </div>
+
+      <!-- Invite URL — primary entry point -->
+      <div class="section">
+        <div class="section-label">Invite URL</div>
+        <label>
+          Paste the invite link your DM sent you
+          <input id="invite-url" type="url" placeholder="https://vtt.example.com/join/ABC123" autocomplete="off" />
+        </label>
+        <div class="url-preview" id="url-preview"></div>
+      </div>
+
+      <!-- Character -->
+      <div class="section">
+        <div class="section-label">Character</div>
+        <label>
+          Which character are you playing?
           <select id="character-select">
             <option value="">— select a character —</option>
           </select>
         </label>
-        <button class="btn-primary" id="connect-launch" style="margin-top: 10px;">
-          Connect &amp; Launch
-        </button>
       </div>
 
-      <!-- Password (hidden until preflight says existing full account) -->
-      <div id="password-section" style="display:none;">
+      <!-- Main action -->
+      <button class="btn-primary" id="connect-launch">Connect &amp; Launch</button>
+
+      <!-- Password (shown when existing full account detected) -->
+      <div id="password-section" style="display:none; margin-top:12px;">
         <div class="section-label">Account Login Required</div>
-        <label>
+        <label style="margin-top:4px;">
           Password
           <input id="login-password" type="password" placeholder="Your VTT-Chat password" />
         </label>
@@ -242,12 +206,23 @@
       </div>
 
       <!-- Status -->
-      <div id="status" class="status-box" style="margin-bottom: 10px; display:none;"></div>
+      <div id="status" class="status-box" style="margin-top:10px; display:none;"></div>
 
       <hr class="divider" />
 
       <!-- Relaunch -->
-      <button class="btn-secondary" id="relaunch" style="width:100%;">Reopen Last Session</button>
+      <button class="btn-secondary" id="relaunch" style="width:100%; margin-bottom:10px;">
+        Reopen Last Session
+      </button>
+
+      <!-- Managed servers (secondary — collapsed by default) -->
+      <details>
+        <summary>Manage saved servers</summary>
+        <div class="server-list" id="servers"></div>
+        <div class="btn-row" style="margin-top: 6px;">
+          <button class="btn-secondary btn-small" id="remove-server">Remove selected</button>
+        </div>
+      </details>
 
     </div>
     <script src="popup.js"></script>

@@ -56,7 +56,8 @@ async function getState() {
     lastPreflight = null,
     ddbUser = null,
     ddbCharacterList = null,
-    ddbActiveContext = null
+    ddbActiveContext = null,
+    savedInviteCode = ""
   } = await browser.storage.local.get([
     "servers",
     "activeServerId",
@@ -64,9 +65,10 @@ async function getState() {
     "lastPreflight",
     "ddbUser",
     "ddbCharacterList",
-    "ddbActiveContext"
+    "ddbActiveContext",
+    "savedInviteCode"
   ]);
-  return { servers, activeServerId, lastSession, lastPreflight, ddbUser, ddbCharacterList, ddbActiveContext };
+  return { servers, activeServerId, lastSession, lastPreflight, ddbUser, ddbCharacterList, ddbActiveContext, savedInviteCode };
 }
 
 async function getActiveServer() {
@@ -396,8 +398,8 @@ async function runPreflightForPopup(payload) {
 
   const state = await getState();
   const context = buildPopupContext(state, payload);
-  if (!context.inviteCode || !context.email || !context.externalUserId) {
-    return { ok: false, error: "inviteCode, email, and external user ID are required" };
+  if (!context.inviteCode || !context.externalUserId) {
+    return { ok: false, error: "Invite code and D&D Beyond user ID are required" };
   }
 
   const currentToken = await ensureRenewedGuestToken(server);
@@ -416,8 +418,8 @@ async function runGuestLoginForPopup(payload) {
 
   const state = await getState();
   const context = buildPopupContext(state, payload);
-  if (!context.inviteCode || !context.email || !context.externalUserId) {
-    return { ok: false, error: "inviteCode, email, and external user ID are required" };
+  if (!context.inviteCode || !context.externalUserId) {
+    return { ok: false, error: "Invite code and D&D Beyond user ID are required" };
   }
 
   const selectedCharacter = Array.isArray(state.ddbCharacterList)
@@ -674,12 +676,20 @@ async function handleConnect(payload) {
     return;
   }
 
+  const state = await getState();
+
+  // Resolve invite code: prefer server's stored code, fall back to last session or popup-saved code
+  const inviteCode =
+    String(server.serverCode || "").trim() ||
+    String(state.lastSession?.inviteCode || "").trim() ||
+    String(state.savedInviteCode || "").trim();
+
   const context = {
     email: String(payload?.ddbUser?.email || "").trim(),
     externalUserId: String(payload?.ddbUser?.id || "").trim(),
     displayName: payload?.ddbUser?.displayName || "",
     avatarUrl: payload?.ddbUser?.avatarUrl || null,
-    inviteCode: String(server.serverCode || "").trim()
+    inviteCode
   };
 
   const preflightResult = await runPreflightSequence(
