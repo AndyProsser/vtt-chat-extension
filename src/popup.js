@@ -63,7 +63,7 @@ async function ensureServer(serverUrl) {
 // Campaign connections
 // ---------------------------------------------------------------------------
 
-async function saveCampaignConnection({ ddbCharacterId, serverUrl, inviteCode, inviteUrl, campaignName }) {
+async function saveCampaignConnection({ ddbCharacterId, serverUrl, inviteCode, inviteUrl, campaignName, campaignId }) {
   const serverId = await ensureServer(serverUrl);
   const { campaignConnections: conns } = await getState();
   const existing = conns.find(c => c.ddbCharacterId === ddbCharacterId);
@@ -71,7 +71,8 @@ async function saveCampaignConnection({ ddbCharacterId, serverUrl, inviteCode, i
     id: existing?.id ?? crypto.randomUUID(),
     serverId, serverUrl, inviteCode, inviteUrl,
     ddbCharacterId,
-    campaignName: campaignName || null,
+    campaignName: campaignName || existing?.campaignName || null,
+    campaignId: campaignId || existing?.campaignId || null,
     lastConnectedAt: Date.now()
   };
   const next = existing
@@ -585,6 +586,14 @@ async function handlePasswordLaunch(char) {
     return;
   }
 
+  if (result.user?.campaignId) {
+    const freshState = await getState();
+    const freshConn = findConn(freshState.campaignConnections, char.id);
+    if (freshConn) {
+      await saveCampaignConnection({ ...freshConn, campaignId: result.user.campaignId });
+    }
+  }
+
   showStatus("Connected! VTT-Chat is opening…", "ok");
   setTimeout(() => window.close(), 800);
 }
@@ -613,6 +622,15 @@ async function doGuestLaunch(char, state, email, inviteCode, campaignName) {
     showStatus(result?.error || "Login failed.", "error");
     document.querySelector(`.char-card[data-char-id="${char.id}"]`)?.classList.remove("launching");
     return;
+  }
+
+  // Persist the VTT-Chat campaignId so session-status polls can use it
+  if (result.user?.campaignId) {
+    const freshState = await getState();
+    const conn = findConn(freshState.campaignConnections, char.id);
+    if (conn) {
+      await saveCampaignConnection({ ...conn, campaignId: result.user.campaignId });
+    }
   }
 
   showStatus(`Connected to "${campaignName || "campaign"}"! VTT-Chat is opening…`, "ok");
@@ -695,7 +713,7 @@ async function checkSessionStatuses(campaignConnections) {
     try {
       const result = await browser.runtime.sendMessage({
         type: "check-session-status",
-        payload: { serverUrl: conn.serverUrl, inviteCode: conn.inviteCode }
+        payload: { serverUrl: conn.serverUrl, campaignId: conn.campaignId || null }
       });
 
       const status = result?.active ? "active"
@@ -724,12 +742,13 @@ function setupRelaunch(lastSession, servers) {
 
   btn.disabled = !canRelaunch;
   btn.addEventListener("click", async () => {
-    const { servers: sv, lastSession: ls } = await getState();
-    if (!ls) return;
-    const srv = sv.find(s => s.id === ls.serverId);
-    if (!srv) return;
-    const code = ls.inviteCode || srv.serverCode || "";
-    browser.tabs.create({ url: `${srv.url.replace(/\/$/, "")}/join/${encodeURIComponent(code)}` });
+    btn.disabled = true;
+    const result = await browser.runtime.sendMessage({ type: "relaunch-session" });
+    if (!result?.ok) {
+      showStatus(result?.error || "Could not reopen session — please reconnect.", "error");
+      btn.disabled = false;
+      return;
+    }
     window.close();
   });
 }

@@ -46,6 +46,10 @@ browser.runtime.onMessage.addListener((msg) => {
   if (msg.type === "check-session-status") {
     return checkSessionStatus(msg.payload || {});
   }
+
+  if (msg.type === "relaunch-session") {
+    return handleRelaunchSession();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -84,6 +88,29 @@ async function getActiveServer() {
 
 function baseServerUrl(url) {
   return String(url || "").trim().replace(/\/$/, "");
+}
+
+// ---------------------------------------------------------------------------
+// Device credential helpers (stored in browser.storage.local)
+// ---------------------------------------------------------------------------
+
+async function getDeviceId() {
+  const { deviceId } = await browser.storage.local.get("deviceId");
+  if (deviceId) return deviceId;
+  const id = crypto.randomUUID();
+  await browser.storage.local.set({ deviceId: id });
+  return id;
+}
+
+async function getDeviceCredential(serverId) {
+  const key = `dc:${serverId}`;
+  const data = await browser.storage.local.get(key);
+  return data[key] || null;
+}
+
+async function setDeviceCredential(serverId, credential) {
+  if (!serverId || !credential) return;
+  await browser.storage.local.set({ [`dc:${serverId}`]: credential });
 }
 
 // ---------------------------------------------------------------------------
@@ -133,23 +160,26 @@ function setGuestSession(result, context) {
 }
 
 async function ensureRenewedGuestToken(server) {
-  if (!guestSession || !guestSession.token || !isTokenNearExpiry(guestSession)) {
-    return guestSession?.token || null;
-  }
-  if (!guestSession.renewalPayload) return guestSession.token;
+  if (!guestSession || !guestSession.token) return null;
+  if (!isTokenNearExpiry(guestSession)) return guestSession.token;
 
-  const renewed = await apiJson(server, "/api/auth/extension/guest-login", {
+  const credential = await getDeviceCredential(server.id);
+  if (!credential) return guestSession.token;
+
+  const deviceId = await getDeviceId();
+  const renewed = await apiJson(server, "/api/auth/extension/credential/exchange", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(guestSession.renewalPayload)
+    body: JSON.stringify({ credential, deviceId })
   });
 
   if (renewed.response.ok && renewed.json.token) {
-    setGuestSession(renewed.json, {
-      inviteCode: guestSession.inviteCode,
-      campaignId: renewed.json.user?.campaignId || guestSession.campaignId,
-      renewalPayload: guestSession.renewalPayload
-    });
+    if (renewed.json.credential) {
+      await setDeviceCredential(server.id, renewed.json.credential);
+    }
+    guestSession.token = renewed.json.token;
+    guestSession.expiresAt = tokenExpiryMs(renewed.json.token);
+    guestSession.campaignId = renewed.json.user?.campaignId || guestSession.campaignId;
   }
   return guestSession.token;
 }
@@ -259,7 +289,9 @@ async function syncCharacterAndCampaign(server, token, campaignId, payload) {
     level: typeof character.level === "number" ? character.level : undefined,
     avatarUrl: avatarUrl || undefined,
     characterUrl: character.characterUrl || undefined,
-    stats: character.stats || undefined
+    stats: character.stats || undefined,
+    conditions: Array.isArray(character.conditions) ? character.conditions : undefined,
+    features: Array.isArray(character.features) ? character.features : undefined
   } : undefined;
 
   if (characterUpdate && !characterUpdate.externalCharacterId) return;
@@ -447,6 +479,7 @@ async function runGuestLoginForPopup(payload) {
       }
     : null;
 
+  const deviceId = await getDeviceId();
   const guestPayload = {
     inviteCode: context.inviteCode,
     externalSystem: EXTERNAL_SYSTEM,
@@ -454,6 +487,7 @@ async function runGuestLoginForPopup(payload) {
     email: context.email,
     displayName: context.displayName || undefined,
     avatarUrl: context.avatarUrl || undefined,
+    deviceId,
     character: payloadCharacter?.externalCharacterId
       ? payloadCharacter
       : selectedCharacter
@@ -483,10 +517,14 @@ async function runGuestLoginForPopup(payload) {
     };
   }
 
+  if (login.json.deviceCredential) {
+    await setDeviceCredential(server.id, login.json.deviceCredential);
+  }
+
   setGuestSession(login.json, {
     inviteCode: context.inviteCode,
     campaignId: login.json.user?.campaignId || null,
-    renewalPayload: guestPayload
+    renewalPayload: null
   });
 
   await browser.storage.local.set({
@@ -579,13 +617,34 @@ async function runFullLoginForPopup(payload) {
 }
 
 // ---------------------------------------------------------------------------
+// Session ensure
+// ---------------------------------------------------------------------------
+
+async function ensureSession(server, token, campaignId) {
+  if (!token || !campaignId) return null;
+  const result = await apiJson(
+    server,
+    `/api/campaigns/${encodeURIComponent(campaignId)}/session/ensure`,
+    { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!result.response.ok) return null;
+  return result.json; // { sessionId, sessionState, campaignDisplayState }
+}
+
+// ---------------------------------------------------------------------------
 // Login-and-launch helpers (login + sync + open tab)
 // ---------------------------------------------------------------------------
 
-async function launchTab(server, inviteCode, token) {
-  const base = `${baseServerUrl(server.url)}/join/${encodeURIComponent(inviteCode)}`;
-  const url = token ? `${base}?token=${encodeURIComponent(token)}` : base;
-  browser.tabs.create({ url });
+async function launchTab(server, campaignId, token, sessionId, emailHint) {
+  const params = new URLSearchParams();
+  if (campaignId) params.set("campaignId", campaignId);
+  if (token) {
+    params.set("token", token);
+  } else if (emailHint) {
+    params.set("hint", emailHint);
+  }
+  if (sessionId) params.set("sessionId", sessionId);
+  browser.tabs.create({ url: `${baseServerUrl(server.url)}/ext-launch?${params}` });
 }
 
 async function runGuestLoginAndLaunch(payload) {
@@ -600,7 +659,8 @@ async function runGuestLoginAndLaunch(payload) {
     await syncCharacterAndCampaign(server, loginResult.token, campaignId, payload);
   }
 
-  await launchTab(server, payload.inviteCode || "", loginResult.token);
+  const session = campaignId ? await ensureSession(server, loginResult.token, campaignId) : null;
+  await launchTab(server, campaignId, loginResult.token, session?.sessionId || null);
   return loginResult;
 }
 
@@ -620,7 +680,8 @@ async function runFullLoginAndLaunch(payload) {
     });
   }
 
-  await launchTab(server, payload.inviteCode || "", loginResult.token);
+  const session = campaignId ? await ensureSession(server, loginResult.token, campaignId) : null;
+  await launchTab(server, campaignId, loginResult.token, session?.sessionId || null);
   return loginResult;
 }
 
@@ -675,7 +736,7 @@ async function handleCharacterUpdate(payload) {
 // Session status check (popup polling)
 // ---------------------------------------------------------------------------
 
-async function checkSessionStatus({ serverUrl, inviteCode }) {
+async function checkSessionStatus({ serverUrl, campaignId }) {
   if (!serverUrl) return { ok: false, serverOnline: false };
   const base = String(serverUrl).replace(/\/$/, "");
   try {
@@ -684,19 +745,16 @@ async function checkSessionStatus({ serverUrl, inviteCode }) {
     const platform = await platformRes.json().catch(() => ({}));
     if (!platform.online) return { ok: false, serverOnline: false };
 
-    // Attempt per-campaign session status (endpoint may not exist yet)
-    if (inviteCode) {
+    if (campaignId) {
       try {
         const sessRes = await fetch(
-          `${base}/api/campaigns/invite/${encodeURIComponent(inviteCode)}/session-status`
+          `${base}/api/campaigns/${encodeURIComponent(campaignId)}/session-status`
         );
         if (sessRes.ok) {
           const sess = await sessRes.json().catch(() => ({}));
-          return {
-            ok: true, serverOnline: true,
-            active: sess.active ?? Boolean(sess.playerCount > 0),
-            playerCount: sess.playerCount ?? null
-          };
+          const state = sess.campaignDisplayState || null;
+          const active = state != null && state !== "IDLE";
+          return { ok: true, serverOnline: true, active, campaignDisplayState: state };
         }
       } catch { /* endpoint not yet available — fall through */ }
     }
@@ -705,6 +763,61 @@ async function checkSessionStatus({ serverUrl, inviteCode }) {
   } catch {
     return { ok: false, serverOnline: false };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Relaunch last session (popup relaunch button)
+// ---------------------------------------------------------------------------
+
+async function handleRelaunchSession() {
+  const state = await getState();
+  const { lastSession } = state;
+  if (!lastSession) return { ok: false, error: "No recent session found" };
+
+  const server = state.servers.find(s => s.id === lastSession.serverId);
+  if (!server) return { ok: false, error: "Server not found" };
+
+  const campaignId = lastSession.campaignId;
+  if (!campaignId) return { ok: false, error: "No campaign ID in last session — please reconnect" };
+
+  // Use in-memory token if still valid, otherwise exchange credential
+  let token = guestSession?.token && !isTokenNearExpiry(guestSession)
+    ? guestSession.token
+    : null;
+
+  if (!token) {
+    const credential = await getDeviceCredential(server.id);
+    if (credential) {
+      const deviceId = await getDeviceId();
+      const exchanged = await apiJson(server, "/api/auth/extension/credential/exchange", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential, deviceId })
+      });
+      if (exchanged.response.ok && exchanged.json.token) {
+        token = exchanged.json.token;
+        if (exchanged.json.credential) {
+          await setDeviceCredential(server.id, exchanged.json.credential);
+        }
+        guestSession = {
+          token,
+          expiresAt: tokenExpiryMs(token),
+          campaignId: exchanged.json.user?.campaignId || campaignId,
+          inviteCode: lastSession.inviteCode,
+          renewalPayload: null,
+          user: exchanged.json.user || null,
+          character: null,
+          authType: lastSession.authType || "GUEST"
+        };
+      }
+    }
+  }
+
+  if (!token) return { ok: false, error: "Session expired — please reconnect from the popup" };
+
+  const session = await ensureSession(server, token, campaignId);
+  await launchTab(server, campaignId, token, session?.sessionId || null);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -749,8 +862,17 @@ async function handleConnect(payload) {
       || preflightResult.invite?.campaign?.id;
     if (token && campaignId) {
       await syncCharacterAndCampaign(server, token, campaignId, payload);
+      const session = await ensureSession(server, token, campaignId);
+      await launchTab(server, campaignId, token, session?.sessionId || null);
     }
-    await launchTab(server, context.inviteCode, token);
+    return;
+  }
+
+  if (flow === "authenticate") {
+    const campaignId = preflightResult.invite?.campaign?.id || null;
+    if (campaignId) {
+      await launchTab(server, campaignId, null, null, context.email);
+    }
     return;
   }
 
@@ -779,5 +901,6 @@ async function handleConnect(payload) {
     await syncCharacterAndCampaign(server, loginResult.token, campaignId, payload);
   }
 
-  await launchTab(server, context.inviteCode, loginResult.token);
+  const session = campaignId ? await ensureSession(server, loginResult.token, campaignId) : null;
+  await launchTab(server, campaignId, loginResult.token, session?.sessionId || null);
 }

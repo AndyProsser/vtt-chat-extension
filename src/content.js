@@ -225,10 +225,14 @@ function extractCharacterStats(data) {
   const speed = data.race?.weightSpeeds?.normal?.walk || 30;
 
   return {
-    hp: { current: currentHp, max: maxHp, temp: tempHp },
+    initiative: null,         // placeholder — not yet extracted from DDB
     proficiencyBonus,
-    speed,
-    abilityScores: Object.keys(abilityScores).length > 0 ? abilityScores : undefined
+    passivePerception: null,  // placeholder — not yet extracted from DDB
+    abilityScores: Object.keys(abilityScores).length > 0 ? abilityScores : undefined,
+    spellSlots: null,         // placeholder — not yet extracted from DDB
+    hp: { current: currentHp, max: maxHp, temp: tempHp },
+    ac: null,                 // placeholder — not yet extracted from DDB
+    speed
   };
 }
 
@@ -247,7 +251,9 @@ function buildFullCharacterPayload(listChar, detailData) {
     level: listChar.level,
     avatarUrl: listChar.avatar || detailData?.avatarUrl || null,
     characterUrl: `https://www.dndbeyond.com/characters/${listChar.id}`,
-    stats: stats || undefined
+    stats: stats || undefined,
+    conditions: [], // placeholder — not yet extracted from DDB
+    features: []    // placeholder — not yet extracted from DDB
   };
 }
 
