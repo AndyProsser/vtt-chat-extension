@@ -754,9 +754,37 @@ async function handleCharacterDataUpdated(payload) {
   });
 }
 
+async function dispatchCharacterRefetch(tabId, characterId) {
+  // Must have an active VTT-Chat session
+  if (!guestSession?.token || !guestSession?.campaignId) return;
+
+  // Must be the character that connected to VTT-Chat
+  const sessionCharId =
+    guestSession.character?.externalCharacterId ||
+    guestSession.character?.ddbCharacterId;
+  if (sessionCharId && String(sessionCharId) !== String(characterId)) return;
+
+  // Tab must be the DDB character sheet for this character
+  let tab;
+  try { tab = await browser.tabs.get(tabId); } catch { return; }
+  const tabCharMatch = (tab.url || "").match(/dndbeyond\.com\/characters\/(\d+)/);
+  if (!tabCharMatch || Number(tabCharMatch[1]) !== characterId) return;
+
+  // Backend must have players connected (don't hit DDB if nobody is in the session)
+  const server = await getActiveServer();
+  if (!server) return;
+  const status = await checkSessionStatus({
+    serverUrl: server.url,
+    campaignId: guestSession.campaignId
+  });
+  if (!status.ok || !status.active) return;
+
+  browser.tabs.sendMessage(tabId, { type: "refetch-character", characterId }).catch(() => {});
+}
+
 browser.webRequest.onCompleted.addListener(
   (details) => {
-    if (details.method !== "PUT" && details.method !== "PATCH") return;
+    if (details.method === "GET") return;
     const m = details.url.match(/\/character\/v5\/character\/(\d+)/);
     if (!m || !details.tabId || details.tabId < 0) return;
 
@@ -768,9 +796,7 @@ browser.webRequest.onCompleted.addListener(
       key,
       setTimeout(() => {
         pendingCharacterSyncs.delete(key);
-        browser.tabs
-          .sendMessage(details.tabId, { type: "refetch-character", characterId })
-          .catch(() => {});
+        void dispatchCharacterRefetch(details.tabId, characterId);
       }, 2000)
     );
   },

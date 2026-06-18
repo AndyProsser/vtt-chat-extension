@@ -563,6 +563,71 @@ The character detail response includes lightweight roster data at `char.campaign
 
 ---
 
+## Live Sync via `webRequest`
+
+The extension listens for write operations to the DDB character service using `chrome.webRequest.onCompleted` in the background service worker. Detection is always active, but a DDB re-fetch only occurs when all pre-conditions are met — by design, we prefer hitting our own backend over DDB.
+
+### Trigger
+
+```text
+PUT | POST | DELETE  https://character-service.dndbeyond.com/character/v5/character/:id
+```
+
+GET requests to the same URL are ignored (they occur on page load and during read-only polling).
+
+### What triggers these writes
+
+| Player action          | Method      |
+| ---------------------- | ----------- |
+| Take damage / heal     | PUT         |
+| Add / remove condition | PUT         |
+| Equip / unequip armor  | PUT         |
+| Add / remove inventory | POST/DELETE |
+| Level up               | PUT         |
+| Short / long rest      | PUT         |
+
+### Debounce
+
+DDB autosaves after many small interactions. A 2-second debounce per `tabId:characterId` key coalesces rapid saves (e.g. equipping an item and updating currency in one action) into a single sync cycle.
+
+### Pre-conditions (all must pass before DDB is contacted)
+
+After the debounce window the background runs four checks in order. If any fails, the cycle is abandoned with no outbound requests.
+
+| #   | Check                       | Detail                                                                                                                         |
+| --- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | **Active VTT-Chat session** | `guestSession.token` and `campaignId` must be present — character has connected to VTT-Chat                                    |
+| 2   | **Correct character**       | Character ID in the request URL must match the character that authenticated with VTT-Chat                                      |
+| 3   | **Character sheet open**    | The tab must be on `dndbeyond.com/characters/:id` for that exact character — campaign pages and other DDB pages do not qualify |
+| 4   | **Players connected**       | Backend `session-status` endpoint must return an active (non-`IDLE`) campaign state — no sync if nobody is in session          |
+
+### Re-fetch and sync flow
+
+1. Background receives `webRequest.onCompleted` for a matching non-GET URL.
+2. After the debounce window, all four pre-conditions are evaluated.
+3. If all pass, background sends `{ type: "refetch-character", characterId }` to the content script in that tab.
+4. The content script fetches the character detail endpoint (authenticated via the user's DDB session cookie) and builds a full payload via `buildFullCharacterPayload`.
+5. The payload is returned as `{ type: "character-data-updated", payload }`.
+6. The background calls `syncCharacterAndCampaign`, pushing the update to the VTT-Chat sync API.
+
+### Fields updated by this path
+
+All fields derived from the character detail endpoint are refreshed on each sync cycle:
+
+| Field                        | Driven by                                |
+| ---------------------------- | ---------------------------------------- |
+| `stats.hp`                   | `removedHitPoints`, `temporaryHitPoints` |
+| `stats.ac`                   | Currently equipped armor and shield      |
+| `stats.initiative`           | DEX mod + initiative modifiers           |
+| `stats.spellSlots`           | `spellSlots[]` / `pactMagic[]`           |
+| `conditions`                 | `char.conditions[]`                      |
+| `features`                   | Class action features                    |
+| `level`, `class`, `subclass` | `char.classes[]`                         |
+
+> **Note:** `inventory` is extracted by `buildFullCharacterPayload` but is not currently included in the VTT-Chat sync payload sent by `syncCharacterAndCampaign`.
+
+---
+
 ## Caching
 
 All extracted data is cached in `browser.storage.local` with a 5-minute TTL (`ddbCacheUpdatedAt`). Keys: `ddbUser`, `ddbCharacterList`, `ddbCacheUpdatedAt`.
