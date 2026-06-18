@@ -678,9 +678,14 @@ function renderConnections(campaignConnections, ddbCharacterList) {
 
     const info = document.createElement("div");
     info.className = "conn-row-info";
-    info.innerHTML = `
-      <div class="conn-row-name">${esc(char?.name || `Character #${conn.ddbCharacterId}`)}</div>
-      <div class="conn-row-url">${esc(conn.campaignName ? `${conn.campaignName} — ${conn.serverUrl}` : (conn.inviteUrl || conn.serverUrl))}</div>`;
+    const nameDiv = document.createElement("div");
+    nameDiv.className = "conn-row-name";
+    nameDiv.textContent = char?.name || `Character #${conn.ddbCharacterId}`;
+    const urlDiv = document.createElement("div");
+    urlDiv.className = "conn-row-url";
+    urlDiv.textContent = conn.campaignName ? `${conn.campaignName} — ${conn.serverUrl}` : (conn.inviteUrl || conn.serverUrl);
+    info.appendChild(nameDiv);
+    info.appendChild(urlDiv);
 
     const del = document.createElement("button");
     del.className = "conn-del";
