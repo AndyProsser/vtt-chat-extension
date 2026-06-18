@@ -112,3 +112,28 @@ See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) for feature ideas and [docs/ARC
 ## 📄 License
 
 MIT
+
+---
+
+## A note to Wizards of the Coast / D&D Beyond
+
+We want to be transparent about what this extension does and why.
+
+VTT-Chat is a companion chat system for tabletop RPG sessions. This extension connects D&D Beyond to VTT-Chat so that players and DMs can carry their character data — names, stats, HP, conditions — directly into our chat experience without manual entry. The goal is simply to make the game more enjoyable.
+
+**What we do:**
+
+- Read character and campaign data that the logged-in user already has access to, using their own session credentials
+- Observe character saves (via the browser's `webRequest` API) to keep synced stats up to date in our system
+- We only contact D&D Beyond's API when a player is actively on their character sheet **and** has an active VTT-Chat session with other players connected — we deliberately avoid unnecessary API calls
+
+**What we do not do:**
+
+- Scrape, bulk-collect, or store DDB content beyond what is needed to run a single user's session
+- Modify any DDB data (with the narrow exception of the experimental currency write-back feature, which is opt-in and clearly marked as unofficial)
+- Circumvent authentication — we use the user's own session, not bots or scrapers
+- Resell, republish, or cache DDB content
+
+We recognise this extension relies on unofficial API access and fully accept that WotC / DDB may require us to change or remove functionality at any time. If you would like us to adjust our approach, or if an official API integration path exists or becomes available, we would be genuinely delighted to work with you.
+
+You can reach us by opening an issue on this repository or via the contact details on the VTT-Chat project.
