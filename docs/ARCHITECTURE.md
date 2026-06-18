@@ -50,8 +50,10 @@ extension/
 │   ├── icon-48.png
 │   └── icon-96.png
 │
-├── dist-firefox/               # Build output for Firefox
-└── dist-chrome/                # Build output for Chrome/Edge
+└── build/
+    ├── firefox/                # Build output for Firefox
+    ├── chrome/                 # Build output for Chrome
+    └── edge/                   # Build output for Microsoft Edge
 ```
 
 ---
@@ -236,13 +238,11 @@ src/icons/icon-96.png
 This script:
 
 1. Loads `manifest.base.json`
-2. Merges it with either:
-   - `manifest.firefox.json`
-   - `manifest.chrome.json`
-3. Writes the merged manifest to:
-   - `dist-firefox/manifest.json`
-   - `dist-chrome/manifest.json`
-4. Copies all extension assets from `src/` into the appropriate output folder
+2. Merges it with the browser-specific override:
+   - `manifest.firefox.json` → `build/firefox/`
+   - `manifest.chrome.json` → `build/chrome/`
+   - `manifest.chrome.json` → `build/edge/` (Edge uses the same Chromium manifest format)
+3. Copies all extension assets from `src/` into each output folder
 
 Here is the **exact build script** used by the project:
 
@@ -270,10 +270,9 @@ function build(target, overrideFile) {
   const manifest = { ...base, ...override };
 
   const srcDir = "src";
-  const outDir = `dist-${target}`;
+  const outDir = `build/${target}`;
   write(outDir, "manifest.json", JSON.stringify(manifest, null, 2));
 
-  // Copy extension files
   copy(`${srcDir}/icons`, `${outDir}/icons`);
   copy(`${srcDir}/content.js`, `${outDir}/content.js`);
   copy(`${srcDir}/background.js`, `${outDir}/background.js`);
@@ -283,6 +282,7 @@ function build(target, overrideFile) {
 
 build("firefox", "manifest.firefox.json");
 build("chrome", "manifest.chrome.json");
+build("edge", "manifest.chrome.json");
 ```
 
 ---
@@ -298,21 +298,13 @@ node build.js
 Produces:
 
 ```text
-dist-firefox/
-  manifest.json
-  content.js
-  background.js
-  popup.html
-  popup.js
-  icons/
-
-dist-chrome/
-  manifest.json
-  content.js
-  background.js
-  popup.html
-  popup.js
-  icons/
+build/
+  firefox/
+    manifest.json  content.js  background.js  popup.html  popup.js  icons/
+  chrome/
+    manifest.json  content.js  background.js  popup.html  popup.js  icons/
+  edge/
+    manifest.json  content.js  background.js  popup.html  popup.js  icons/
 ```
 
 These folders are **load‑ready** in their respective browsers.
@@ -324,7 +316,7 @@ These folders are **load‑ready** in their respective browsers.
 Load via:
 
 ```text
-about:debugging → This Firefox → Load Temporary Add-on → dist-firefox/
+about:debugging → This Firefox → Load Temporary Add-on → build/firefox/
 ```
 
 Firefox uses:
@@ -335,28 +327,35 @@ Firefox uses:
 
 ---
 
-## 🟦 **6.5 Chrome/Edge Build**
+## 🟦 **6.5 Chrome Build**
 
 Load via:
 
 ```text
-chrome://extensions → Developer Mode → Load unpacked → dist-chrome/
+chrome://extensions → Developer Mode → Load unpacked → build/chrome/
 ```
-
-Chrome/Edge use:
-
-- `manifest.chrome.json` overrides
-- `"background": { "service_worker": "background.js" }`
 
 ---
 
-## 🔁 **6.6 How AI Tools Should Modify the Build System**
+## 🔷 **6.6 Microsoft Edge Build**
+
+Load via:
+
+```text
+edge://extensions → Developer Mode → Load unpacked → build/edge/
+```
+
+Edge is Chromium-based and uses the same `manifest.chrome.json` overrides and `service_worker` background as Chrome.
+
+---
+
+## 🔁 **6.7 How AI Tools Should Modify the Build System**
 
 To ensure safe modifications:
 
 ### AI MUST:
 
-- Keep the `src/` → `dist-*` structure intact
+- Keep the `src/` → `build/` structure intact
 - Preserve the manifest merge logic
 - Preserve the file copy logic
 - Keep the build script idempotent

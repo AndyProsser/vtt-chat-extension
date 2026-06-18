@@ -37,7 +37,7 @@ This document outlines the improvements made to the VTT-Chat DDB Connector exten
 
 - Added `.gitignore` with comprehensive patterns for:
   - Node modules and dependencies
-  - Build outputs (dist-\*)
+  - Build outputs (`build/`)
   - IDE and OS files
   - Environment variables and logs
 
@@ -135,13 +135,19 @@ npm run package
 **Firefox:**
 
 ```text
-about:debugging → This Firefox → Load Temporary Add-on → dist-firefox/manifest.json
+about:debugging → This Firefox → Load Temporary Add-on → build/firefox/manifest.json
 ```
 
-**Chrome/Edge:**
+**Chrome:**
 
 ```text
-chrome://extensions → Developer Mode ON → Load unpacked → dist-chrome/
+chrome://extensions → Developer Mode ON → Load unpacked → build/chrome/
+```
+
+**Microsoft Edge:**
+
+```text
+edge://extensions → Developer Mode ON → Load unpacked → build/edge/
 ```
 
 ---

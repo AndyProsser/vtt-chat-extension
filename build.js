@@ -21,11 +21,9 @@ function build(target, overrideFile) {
   const override = load(`${srcDir}/${overrideFile}`);
   const manifest = { ...base, ...override };
 
-  
-  const outDir = `dist-${target}`;
+  const outDir = `build/${target}`;
   write(outDir, "manifest.json", JSON.stringify(manifest, null, 2));
 
-  // Copy extension files
   copy(`icons`, `${outDir}/icons`);
   copy(`${srcDir}/content.js`, `${outDir}/content.js`);
   copy(`${srcDir}/background.js`, `${outDir}/background.js`);
@@ -35,3 +33,4 @@ function build(target, overrideFile) {
 
 build("firefox", "manifest.firefox.json");
 build("chrome", "manifest.chrome.json");
+build("edge", "manifest.chrome.json");

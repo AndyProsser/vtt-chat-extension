@@ -50,8 +50,9 @@ npm run build
 
 This generates:
 
-- `dist-firefox/` — Firefox extension
-- `dist-chrome/` — Chrome/Edge extension
+- `build/firefox/` — Firefox extension
+- `build/chrome/` — Chrome extension
+- `build/edge/` — Microsoft Edge extension
 
 ### Lint
 
@@ -74,13 +75,19 @@ npm run package  # Creates ZIP files for distribution
 
 1. Open `about:debugging`
 2. Click "This Firefox" > "Load Temporary Add-on"
-3. Select `dist-firefox/manifest.json`
+3. Select `build/firefox/manifest.json`
 
-### Chrome/Edge
+### Chrome
 
-1. Open `chrome://extensions` (or `edge://extensions`)
+1. Open `chrome://extensions`
 2. Enable "Developer mode"
-3. Click "Load unpacked" > Select `dist-chrome/`
+3. Click "Load unpacked" > Select `build/chrome/`
+
+### Microsoft Edge
+
+1. Open `edge://extensions`
+2. Enable "Developer mode"
+3. Click "Load unpacked" > Select `build/edge/`
 
 ---
 

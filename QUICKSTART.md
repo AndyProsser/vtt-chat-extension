@@ -23,8 +23,9 @@ npm run lint:fix
 npm run build
 
 # Load in browser
-# Firefox: about:debugging → Load Temporary Add-on → dist-firefox/
-# Chrome: chrome://extensions → Load unpacked → dist-chrome/
+# Firefox: about:debugging → Load Temporary Add-on → build/firefox/
+# Chrome:  chrome://extensions → Load unpacked → build/chrome/
+# Edge:    edge://extensions  → Load unpacked → build/edge/
 ```
 
 ### Before Committing
@@ -65,11 +66,11 @@ git push origin main --tags
 
 | Script | Purpose |
 |--------|---------|
-| `npm run build` | Build for Firefox & Chrome |
+| `npm run build` | Build for Firefox, Chrome & Edge |
 | `npm run lint` | Check code quality |
 | `npm run lint:fix` | Auto-fix style issues |
-| `npm run clean` | Remove dist folders |
-| `npm run package` | Create distributable ZIPs |
+| `npm run clean` | Remove build folder |
+| `npm run package` | Create distributable ZIPs for all three browsers |
 
 ---
 
@@ -78,8 +79,9 @@ git push origin main --tags
 | Item | Location |
 |------|----------|
 | Source files | `src/` |
-| Firefox build | `dist-firefox/` |
-| Chrome build | `dist-chrome/` |
+| Firefox build | `build/firefox/` |
+| Chrome build | `build/chrome/` |
+| Edge build | `build/edge/` |
 | Architecture docs | `docs/ARCHITECTURE.md` |
 | Improvement recommendations | `docs/IMPROVEMENTS.md` |
 | CI/CD pipeline | `.github/workflows/ci-cd.yml` |
@@ -88,16 +90,19 @@ git push origin main --tags
 
 ## Common Issues
 
-**Q: Build fails with "ENOENT: no such file"**
+### Q: Build fails with "ENOENT: no such file"
+
 ```bash
 npm run clean
 npm run build
 ```
 
-**Q: ESLint complains about undefined variables**
+### Q: ESLint complains about undefined variables
+
 → Check `package.json`'s eslintConfig globals section has `browser` and `chrome`
 
-**Q: Dist folders are stale**
+### Q: Build folder is stale
+
 ```bash
 npm run clean && npm run build
 ```
