@@ -3,10 +3,8 @@ if (typeof browser === "undefined") {
   var browser = chrome;
 }
 
-console.log("[VTT-Chat] Content script loaded");
-
 //
-// 1. USER EXTRACTORS (your POC)
+// 1. USER EXTRACTORS
 //
 function extractFromMegaMenu() {
   const el = document.querySelector("#mega-menu-target");
@@ -52,8 +50,8 @@ function extractEscapedUserJson(text) {
 function unescapeJson(escaped) {
   return escaped
     .replace(/\\"/g, '"')
-    .replace(/\\\\/g, '\\')
-    .replace(/\\n/g, '\n');
+    .replace(/\\\\/g, "\\")
+    .replace(/\\n/g, "\n");
 }
 
 function extractFromNextFlight() {
@@ -101,8 +99,8 @@ async function buildAuthHeaders() {
   const token = await fetchCobaltAuthToken();
   if (!token) return {};
   return {
-    "Authorization": `Bearer ${token}`,
-    "Accept": "application/json"
+    Authorization: `Bearer ${token}`,
+    Accept: "application/json"
   };
 }
 
@@ -134,24 +132,19 @@ function sendCharacterSyncUpdate(update) {
   try {
     browser.runtime.sendMessage({ type: "character-update-detected", payload: update });
   } catch {
-    // Ignore background availability issues.
+    // extension context may be unavailable during page unload
   }
 }
 
 function emitCharacterDiffs(previousList, nextList, ddbUserId) {
-  if (!Array.isArray(previousList) || !Array.isArray(nextList)) {
-    return;
-  }
-
+  if (!Array.isArray(previousList) || !Array.isArray(nextList)) return;
   const prevMap = new Map(previousList.map(c => [String(c.id), c]));
   for (const nextChar of nextList) {
     const prevChar = prevMap.get(String(nextChar.id));
     if (!prevChar) continue;
-
     const levelChanged = Number(prevChar.level || 0) !== Number(nextChar.level || 0);
     const classChanged = String(prevChar.class || "") !== String(nextChar.class || "");
     if (!levelChanged && !classChanged) continue;
-
     sendCharacterSyncUpdate({
       source: "player",
       externalUserId: String(ddbUserId || ""),
@@ -201,38 +194,179 @@ async function fetchCharacterDetails(characterId) {
   return json.data || null;
 }
 
-const DDB_STAT_KEYS = { 1: "str", 2: "dex", 3: "con", 4: "int", 5: "wis", 6: "cha" };
+const DDB_STAT_ID = { 1: "str", 2: "dex", 3: "con", 4: "int", 5: "wis", 6: "cha" };
+
+const SCORE_SUBTYPE = {
+  "strength-score": "str", "dexterity-score": "dex", "constitution-score": "con",
+  "intelligence-score": "int", "wisdom-score": "wis", "charisma-score": "cha"
+};
+
+const CONDITION_NAMES = {
+  1: "Blinded", 2: "Charmed", 3: "Deafened", 4: "Exhaustion", 5: "Frightened",
+  6: "Grappled", 7: "Incapacitated", 8: "Invisible", 9: "Paralyzed", 10: "Petrified",
+  11: "Poisoned", 12: "Prone", 13: "Restrained", 14: "Stunned", 15: "Unconscious"
+};
+
+function getFlatMods(data) {
+  return Object.values(data.modifiers || {}).flat();
+}
+
+function abilityMod(score) {
+  return Math.floor((score - 10) / 2);
+}
+
+function sumBonusMods(mods, subType) {
+  return mods
+    .filter(m => m.type === "bonus" && m.subType === subType)
+    .reduce((s, m) => s + (m.value ?? m.fixedValue ?? 0), 0);
+}
+
+function extractAbilityScores(data) {
+  const mods = getFlatMods(data);
+  const modBonus = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
+  for (const m of mods) {
+    const stat = SCORE_SUBTYPE[m.subType];
+    if (m.type === "bonus" && stat) modBonus[stat] += (m.value ?? m.fixedValue ?? 0);
+  }
+
+  const scores = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
+  for (const s of (data.stats || [])) {
+    const k = DDB_STAT_ID[s.id]; if (k) scores[k] = s.value || 0;
+  }
+  for (const s of (data.bonusStats || [])) {
+    const k = DDB_STAT_ID[s.id]; if (k && s.value) scores[k] += s.value;
+  }
+  for (const k of Object.keys(scores)) scores[k] += modBonus[k];
+  // overrideStats win everything
+  for (const s of (data.overrideStats || [])) {
+    const k = DDB_STAT_ID[s.id]; if (k && s.value != null) scores[k] = s.value;
+  }
+  return scores;
+}
 
 function extractCharacterStats(data) {
   if (!data) return null;
 
-  const abilityScores = {};
-  for (const stat of (data.stats || [])) {
-    const key = DDB_STAT_KEYS[stat.id];
-    if (key && stat.value != null) abilityScores[key] = stat.value;
-  }
-
-  const totalLevel = (data.classes || []).reduce((sum, cls) => sum + (cls.level || 0), 0);
+  const mods = getFlatMods(data);
+  const abilityScores = extractAbilityScores(data);
+  const totalLevel = (data.classes || []).reduce((s, c) => s + (c.level || 0), 0);
   const proficiencyBonus = totalLevel > 0 ? Math.floor((totalLevel - 1) / 4) + 2 : 2;
 
-  const baseHp = data.baseHitPoints || 0;
-  const bonusHp = data.bonusHitPoints || 0;
-  const removedHp = data.removedHitPoints || 0;
-  const maxHp = baseHp + bonusHp;
-  const currentHp = Math.max(0, maxHp - removedHp);
-  const tempHp = data.temporaryHitPoints || 0;
+  // HP — baseHitPoints is hit-dice only; CON and per-level feature bonuses added manually
+  const conMod = abilityMod(abilityScores.con);
+  const hpPerLevel = mods
+    .filter(m => m.type === "bonus" && m.subType === "hit-points-per-level")
+    .reduce((s, m) => s + (m.value ?? m.fixedValue ?? 0), 0);
+  const maxHp = data.overrideHitPoints ??
+    ((data.baseHitPoints || 0) + (conMod * totalLevel) + (hpPerLevel * totalLevel) + (data.bonusHitPoints || 0));
+  const currentHp = Math.max(0, maxHp - (data.removedHitPoints || 0));
 
+  // AC
+  const UNARMORED_STAT = { 1: "str", 2: "dex", 3: "con", 4: "int", 5: "wis", 6: "cha" };
+  const dexMod = abilityMod(abilityScores.dex);
+  const equippedArmor = (data.inventory || []).find(
+    i => i.equipped && i.definition?.filterType === "Armor" && i.definition?.armorTypeId !== 4
+  );
+  const equippedShield = (data.inventory || []).find(
+    i => i.equipped && i.definition?.armorTypeId === 4
+  );
+  let baseAC;
+  if (equippedArmor) {
+    const base = equippedArmor.definition.armorClass;
+    const typeId = equippedArmor.definition.armorTypeId;
+    if (typeId === 1)      baseAC = base + dexMod;
+    else if (typeId === 2) baseAC = base + Math.min(dexMod, 2);
+    else                   baseAC = base;
+  } else {
+    // Unarmored Defense: statId encodes the extra ability score added to 10 + DEX
+    const unarmoredMod = mods.find(
+      m => m.type === "set" && m.subType === "unarmored-armor-class" && m.statId != null
+    );
+    baseAC = unarmoredMod
+      ? 10 + dexMod + abilityMod(abilityScores[UNARMORED_STAT[unarmoredMod.statId]])
+      : 10 + dexMod;
+  }
+  const ac = baseAC + (equippedShield ? 2 : 0) + sumBonusMods(mods, "armor-class");
+
+  // Initiative
+  const initiative = dexMod + sumBonusMods(mods, "initiative");
+
+  // Passive Perception: 10 + WIS + prof if proficient + prof again if expert
+  const wisMod = abilityMod(abilityScores.wis);
+  const percProf  = mods.some(m => m.type === "proficiency" && m.subType === "perception") ? proficiencyBonus : 0;
+  const percExpert = mods.some(m => m.type === "expertise"  && m.subType === "perception") ? proficiencyBonus : 0;
+  const passivePerception = 10 + wisMod + percProf + percExpert;
+
+  // Speed
   const speed = data.race?.weightSpeeds?.normal?.walk || 30;
 
+  // Spell slots — include only levels with at least one slot (regular + pact magic)
+  const spellSlots = {};
+  for (const slot of (data.spellSlots || [])) {
+    const total = (slot.available || 0) + (slot.used || 0);
+    if (total > 0) spellSlots[slot.level] = { total, used: slot.used || 0, available: slot.available || 0 };
+  }
+  for (const slot of (data.pactMagic || [])) {
+    const total = (slot.available || 0) + (slot.used || 0);
+    if (total > 0) spellSlots[`pact${slot.level}`] = { total, used: slot.used || 0, available: slot.available || 0 };
+  }
+
   return {
-    initiative: null,         // placeholder — not yet extracted from DDB
+    initiative,
     proficiencyBonus,
-    passivePerception: null,  // placeholder — not yet extracted from DDB
-    abilityScores: Object.keys(abilityScores).length > 0 ? abilityScores : undefined,
-    spellSlots: null,         // placeholder — not yet extracted from DDB
-    hp: { current: currentHp, max: maxHp, temp: tempHp },
-    ac: null,                 // placeholder — not yet extracted from DDB
+    passivePerception,
+    abilityScores,
+    spellSlots: Object.keys(spellSlots).length > 0 ? spellSlots : null,
+    hp: { current: currentHp, max: maxHp, temp: data.temporaryHitPoints || 0 },
+    ac,
     speed
+  };
+}
+
+function extractConditions(data) {
+  return (data.conditions || []).map(c => CONDITION_NAMES[c.id] || String(c.id));
+}
+
+function extractFeatures(data) {
+  const seen = new Set();
+  const features = [];
+  const push = name => { if (name && !seen.has(name)) { seen.add(name); features.push(name); } };
+  for (const a of (data.actions?.class || []))  push(a.name);
+  for (const o of (data.options?.class || []))  push(o.definition?.name);
+  return features;
+}
+
+function extractInventory(data) {
+  const items = (data.inventory || []).map(item => {
+    const def = item.definition || {};
+    return {
+      id: item.id,
+      name: def.name || null,
+      type: def.filterType || null,
+      subtype: def.subType || null,
+      rarity: def.rarity || null,
+      quantity: item.quantity || 1,
+      equipped: item.equipped || false,
+      isAttuned: item.isAttuned || false,
+      chargesUsed: item.chargesUsed || 0,
+      weight: def.weight || 0,
+      cost: def.cost ?? null
+    };
+  });
+  const customItems = (data.customItems || []).map(item => ({
+    id: item.id,
+    name: item.name || null,
+    type: "custom",
+    quantity: item.quantity || 1,
+    equipped: false,
+    isAttuned: false,
+    weight: item.weight || 0,
+    cost: item.cost ?? null,
+    notes: item.notes || null
+  }));
+  return {
+    items: [...items, ...customItems],
+    currency: data.currencies || { cp: 0, sp: 0, gp: 0, ep: 0, pp: 0 }
   };
 }
 
@@ -252,8 +386,9 @@ function buildFullCharacterPayload(listChar, detailData) {
     avatarUrl: listChar.avatar || detailData?.avatarUrl || null,
     characterUrl: `https://www.dndbeyond.com/characters/${listChar.id}`,
     stats: stats || undefined,
-    conditions: [], // placeholder — not yet extracted from DDB
-    features: []    // placeholder — not yet extracted from DDB
+    conditions: extractConditions(detailData || {}),
+    features: extractFeatures(detailData || {}),
+    inventory: detailData ? extractInventory(detailData) : null
   };
 }
 
@@ -263,11 +398,9 @@ function buildFullCharacterPayload(listChar, detailData) {
 async function fetchCampaignDetails(campaignId) {
   const headers = await buildAuthHeaders();
   if (!headers.Authorization) return null;
-
   const url = `https://api.dndbeyond.com/campaigns/v1/details/${campaignId}`;
   const res = await fetch(url, { method: "GET", headers });
   if (!res.ok) return null;
-
   const data = await res.json();
   return data.data;
 }
@@ -289,7 +422,6 @@ function getCampaignIdFromUrl() {
   const m = location.pathname.match(/\/campaigns\/(\d+)/);
   return m ? Number(m[1]) : null;
 }
-
 async function isOwnedCharacterPage() {
   if (!isCharacterPage()) return false;
   const charId = getCharacterIdFromUrl();
@@ -298,219 +430,75 @@ async function isOwnedCharacterPage() {
 }
 
 //
-// 6. BUTTON INJECTION
+// 6. CHARACTER INFO BUTTON (debug helper — copies extracted JSON to clipboard)
 //
-function injectLaunchButton(targetEl) {
-  if (!targetEl) {
-    console.log("[VTT-Chat] No target element provided");
-    return;
+async function copyCharacterInfoToClipboard(charId, btn) {
+  const { ddbCharacterList } = await browser.storage.local.get("ddbCharacterList");
+  const listChar = ddbCharacterList?.find(c => c.id === charId);
+  if (!listChar) return;
+
+  const origLabel = btn?.textContent;
+  try {
+    const detailData = await fetchCharacterDetails(charId);
+    const payload = buildFullCharacterPayload(listChar, detailData);
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    if (btn) {
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = origLabel; }, 1500);
+    }
+  } catch {
+    if (btn) {
+      btn.textContent = "Error";
+      setTimeout(() => { btn.textContent = origLabel; }, 1500);
+    }
   }
-  if (document.getElementById("vtt-launch-btn")) {
-    console.log("[VTT-Chat] Button already exists");
-    return;
-  }
+}
 
-  if (isCharacterPage()) {
-    console.log("[VTT-Chat] Injecting for character page");
+function injectCharacterInfoButtons(characterList) {
+  if (!characterList?.length) return;
+  const knownIds = new Set(characterList.map(c => c.id));
 
-    // Find the existing Game Log button structure to copy classes
-    const existingDiv = document.querySelector('div[role="button"][aria-roledescription="Game Log"]');
-    if (!existingDiv) {
-      console.log("[VTT-Chat] Could not find Game Log button structure");
-      return;
-    }
+  document.querySelectorAll('a[href*="/characters/"]').forEach(link => {
+    const m = link.href.match(/\/characters\/(\d+)/);
+    if (!m) return;
+    const charId = Number(m[1]);
+    if (!knownIds.has(charId)) return;
 
-    const existingInnerDiv = existingDiv.querySelector('div');
-    if (!existingInnerDiv) {
-      console.log("[VTT-Chat] Could not find inner div in Game Log button");
-      return;
-    }
+    const buttonId = `vtt-info-btn-${charId}`;
+    if (document.getElementById(buttonId)) return;
 
-    console.log("[VTT-Chat] Found Game Log structure, copying classes:", existingDiv.className);
-
-    // Create the tooltip span wrapper
-    const tooltipSpan = document.createElement("span");
-    tooltipSpan.className = "ddbc-tooltip ddbc-tooltip--dark-mode";
-    tooltipSpan.setAttribute("data-tippy", "");
-    tooltipSpan.setAttribute("data-original-title", "Launch VTT Chat");
-
-    // Create the button div
-    const buttonDiv = document.createElement("div");
-    buttonDiv.id = "vtt-launch-btn";
-    buttonDiv.setAttribute("role", "button");
-    buttonDiv.setAttribute("aria-roledescription", "Launch VTT Chat");
-    buttonDiv.className = existingDiv.className; // Copy the classes
-
-    // Create the inner content div
-    const innerDiv = document.createElement("div");
-    innerDiv.className = existingInnerDiv.className; // Copy the inner div classes
-
-    // Add the chat icon SVG
-    innerDiv.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10zM8 12h2v2H8v-2zm4 0h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg>`;
-
-    // Assemble the structure
-    buttonDiv.appendChild(innerDiv);
-    tooltipSpan.appendChild(buttonDiv);
-
-    // Add click event
-    buttonDiv.addEventListener("click", onLaunchClick);
-
-    // Insert before the target element
-    if (targetEl.parentNode) {
-      targetEl.parentNode.insertBefore(tooltipSpan, targetEl);
-      console.log("[VTT-Chat] Character page button injected successfully");
-    } else {
-      console.log("[VTT-Chat] Could not find parent node for character page insertion");
-    }
-  } else if (isCampaignPage()) {
-    console.log("[VTT-Chat] Injecting for campaign page");
+    const card =
+      link.closest('[class*="listing-item"]') ||
+      link.closest('[class*="character-card"]') ||
+      link.closest('[class*="ddb-character"]') ||
+      link.closest("li") ||
+      link.closest("article") ||
+      link.parentElement;
+    if (!card) return;
 
     const btn = document.createElement("button");
-    btn.id = "vtt-launch-btn";
-    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3.05 1.05 4.42L2 22l5.58-1.05C9.95 21.64 11.46 22 13 22h7c1.1 0 2-.9 2-2V12c0-5.52-4.48-10-10-10zM8 12h2v2H8v-2zm4 0h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg> CHAT`;
-    btn.title = "Launch VTT Chat";
-    btn.style.background = "#2d5aa0";
-    btn.style.color = "#fff";
-    btn.style.padding = "6px 12px";
-    btn.style.border = "none";
-    btn.style.cursor = "pointer";
-    btn.style.marginRight = "8px";
-    btn.style.fontWeight = "600";
-    btn.style.display = "flex";
-    btn.style.alignItems = "center";
-    btn.style.gap = "4px";
+    btn.id = buttonId;
+    btn.textContent = "INFO";
+    btn.title = "Copy character JSON to clipboard (VTT-Chat)";
+    btn.style.cssText =
+      "position:absolute;top:6px;right:6px;padding:2px 8px;font-size:11px;" +
+      "font-weight:600;background:#1a3a6b;color:#fff;border:none;" +
+      "border-radius:3px;cursor:pointer;z-index:9999;opacity:0.85;";
+    btn.addEventListener("mouseenter", () => { btn.style.opacity = "1"; });
+    btn.addEventListener("mouseleave", () => { btn.style.opacity = "0.85"; });
+    btn.addEventListener("click", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      copyCharacterInfoToClipboard(charId, btn);
+    });
 
-    btn.addEventListener("click", onLaunchClick);
-
-    targetEl.appendChild(btn);
-    console.log("[VTT-Chat] Campaign page button injected successfully");
-  } else {
-    console.log("[VTT-Chat] Unknown page type, no injection performed");
-  }
-}
-
-//
-// 7. LAUNCH HANDLER
-//
-async function onLaunchClick() {
-  console.log("[VTT-Chat] Launch button clicked");
-
-  const { ddbUser, ddbCharacterList } = await browser.storage.local.get([
-    "ddbUser",
-    "ddbCharacterList"
-  ]);
-
-  if (!ddbUser) {
-    console.log("[VTT-Chat] No user data available");
-    return;
-  }
-
-  console.log("[VTT-Chat] Preparing payload for user:", ddbUser.displayName);
-
-  const payload = {
-    ddbUser,
-    ddbCampaignId: null,
-    ddbCampaignName: null,
-    dmExternalUserId: null,
-    isDm: false,
-    character: null,
-    campaignPacket: null
-  };
-
-  const activeContext = {
-    externalCampaignId: null,
-    campaignName: null,
-    dmExternalUserId: null,
-    members: []
-  };
-
-  if (isCharacterPage()) {
-    const charId = getCharacterIdFromUrl();
-    console.log("[VTT-Chat] Character page detected, character ID:", charId);
-
-    const char = ddbCharacterList?.find(c => c.id === charId);
-    if (!char) {
-      console.log("[VTT-Chat] Character not found in list");
-      return;
-    }
-
-    payload.ddbCampaignId = String(char.campaignId || "");
-    payload.ddbCampaignName = char.campaignName || "Campaign";
-    payload.isDm = false;
-
-    activeContext.externalCampaignId = payload.ddbCampaignId;
-    activeContext.campaignName = payload.ddbCampaignName;
-
-    const [campaignDetails, charDetail] = await Promise.all([
-      char.campaignId ? fetchCampaignDetails(char.campaignId) : Promise.resolve(null),
-      fetchCharacterDetails(char.id)
-    ]);
-
-    payload.character = buildFullCharacterPayload(char, charDetail);
-
-    if (campaignDetails) {
-      payload.dmExternalUserId = String(campaignDetails.dmId || "");
-      payload.campaignPacket = buildCampaignPacket(campaignDetails);
-      activeContext.dmExternalUserId = String(campaignDetails.dmId || "");
-      activeContext.members = normalizeCampaignMembers(campaignDetails);
-    }
-
-    console.log("[VTT-Chat] Character payload prepared:", payload.character.name);
-  }
-
-  if (isCampaignPage()) {
-    const campaignId = getCampaignIdFromUrl();
-    console.log("[VTT-Chat] Campaign page detected, campaign ID:", campaignId);
-
-    const details = await fetchCampaignDetails(campaignId);
-    if (!details) {
-      console.log("[VTT-Chat] Could not fetch campaign details");
-      return;
-    }
-
-    payload.ddbCampaignId = String(details.id);
-    payload.ddbCampaignName = details.name;
-    payload.isDm = Number(details.dmId) === Number(ddbUser.id);
-
-    activeContext.externalCampaignId = String(details.id || "");
-    activeContext.campaignName = details.name || null;
-    activeContext.dmExternalUserId = String(details.dmId || "");
-    activeContext.members = normalizeCampaignMembers(details);
-    payload.dmExternalUserId = activeContext.dmExternalUserId;
-    payload.campaignPacket = buildCampaignPacket(details);
-
-    if (!payload.isDm) {
-      const userChar = details.activeCharacters?.find(
-        c => Number(c.userId) === Number(ddbUser.id)
-      );
-      if (userChar) {
-        const charDetail = await fetchCharacterDetails(userChar.id);
-        const listChar = {
-          id: userChar.id,
-          name: userChar.name,
-          level: userChar.level || null,
-          race: null,
-          class: null,
-          avatar: userChar.avatarUrl || null,
-          campaignId: details.id
-        };
-        payload.character = buildFullCharacterPayload(listChar, charDetail);
-      }
-    }
-
-    console.log("[VTT-Chat] Campaign payload prepared, is DM:", payload.isDm);
-  }
-
-  await browser.storage.local.set({
-    ddbActiveContext: activeContext
+    if (getComputedStyle(card).position === "static") card.style.position = "relative";
+    card.appendChild(btn);
   });
-
-  console.log("[VTT-Chat] Sending connect message to background");
-  browser.runtime.sendMessage({ type: "connect", payload });
 }
 
 //
-// 8. CACHE + OBSERVER
+// 7. CACHE + OBSERVER
 //
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -521,12 +509,8 @@ async function ensureDdbCache() {
     "ddbCacheUpdatedAt"
   ]);
 
-  if (ddbUser && ddbCacheUpdatedAt && Date.now() - ddbCacheUpdatedAt < CACHE_TTL_MS) {
-    console.log("[VTT-Chat] Using cached user data");
-    return;
-  }
+  if (ddbUser && ddbCacheUpdatedAt && Date.now() - ddbCacheUpdatedAt < CACHE_TTL_MS) return;
 
-  console.log("[VTT-Chat] Refreshing user cache");
   try {
     const user = extractDdbUser();
     if (!user) {
@@ -535,47 +519,35 @@ async function ensureDdbCache() {
         ddbCharacterList: null,
         ddbCacheUpdatedAt: Date.now()
       });
-      console.log("[VTT-Chat] No user found, cleared cache");
       return;
     }
 
     const rawList = await fetchCharacterList(user.id);
     const characterList = normalizeCharacterList(rawList);
-
     emitCharacterDiffs(ddbCharacterList, characterList, user.id);
-
     await browser.storage.local.set({
       ddbUser: user,
       ddbCharacterList: characterList,
       ddbCacheUpdatedAt: Date.now()
     });
-    console.log("[VTT-Chat] Cache updated with user and", characterList.length, "characters");
   } catch (e) {
-    console.warn("[VTT-Chat] Cache error:", e);
+    console.warn("[VTT-Chat] Cache refresh failed:", e);
   }
 }
 
 (async () => {
   await ensureDdbCache();
 
-  const observer = new MutationObserver(async () => {
-    const { ddbUser } = await browser.storage.local.get("ddbUser");
-    if (!ddbUser) return;
-
-    if (isCharacterPage()) {
-      if (!(await isOwnedCharacterPage())) return;
-      const gameLogSpan = document.querySelector('span.ddbc-tooltip[data-original-title="Launch Game"]');
-      if (gameLogSpan) {
-        setTimeout(() => injectLaunchButton(gameLogSpan), 1000);
-      }
-    }
-
-    if (isCampaignPage()) {
-      const header =
-        document.querySelector('div.ddb-campaigns-detail-gamespace') ||
-        document.querySelector("header.page-header");
-      injectLaunchButton(header);
-    }
+  let injectTimer = null;
+  const observer = new MutationObserver(() => {
+    clearTimeout(injectTimer);
+    injectTimer = setTimeout(async () => {
+      const { ddbUser, ddbCharacterList } = await browser.storage.local.get([
+        "ddbUser",
+        "ddbCharacterList"
+      ]);
+      if (ddbUser) injectCharacterInfoButtons(ddbCharacterList);
+    }, 300);
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
