@@ -498,7 +498,30 @@ function injectCharacterInfoButtons(characterList) {
 }
 
 //
-// 7. CACHE + OBSERVER
+// 7. XHR-TRIGGERED REFETCH
+//
+browser.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "refetch-character") {
+    void handleRefetchCharacter(msg.characterId);
+  }
+});
+
+async function handleRefetchCharacter(characterId) {
+  const { ddbCharacterList } = await browser.storage.local.get("ddbCharacterList");
+  const listChar = ddbCharacterList?.find(c => c.id === characterId);
+  if (!listChar) return;
+
+  try {
+    const detailData = await fetchCharacterDetails(characterId);
+    const payload = buildFullCharacterPayload(listChar, detailData);
+    browser.runtime.sendMessage({ type: "character-data-updated", payload });
+  } catch {
+    // fetchCharacterDetails or sendMessage can fail transiently — skip this cycle
+  }
+}
+
+//
+// 8. CACHE + OBSERVER
 //
 const CACHE_TTL_MS = 5 * 60 * 1000;
 

@@ -7,6 +7,7 @@ const TOKEN_RENEWAL_WINDOW_MS = 15 * 60 * 1000;
 const EXTERNAL_SYSTEM = "dndbeyond";
 
 let guestSession = null;
+const pendingCharacterSyncs = new Map();
 
 browser.runtime.onMessage.addListener((msg) => {
   if (msg.type === "connect") {
@@ -40,6 +41,11 @@ browser.runtime.onMessage.addListener((msg) => {
 
   if (msg.type === "character-update-detected") {
     void handleCharacterUpdate(msg.payload || {});
+    return;
+  }
+
+  if (msg.type === "character-data-updated") {
+    void handleCharacterDataUpdated(msg.payload || {});
     return;
   }
 
@@ -731,6 +737,45 @@ async function handleCharacterUpdate(payload) {
     })
   });
 }
+
+// ---------------------------------------------------------------------------
+// XHR-triggered character sync (webRequest observer)
+// ---------------------------------------------------------------------------
+
+async function handleCharacterDataUpdated(payload) {
+  const server = await getActiveServer();
+  if (!server || !guestSession?.token) return;
+
+  const token = await ensureRenewedGuestToken(server);
+  if (!token || !guestSession?.campaignId) return;
+
+  await syncCharacterAndCampaign(server, token, guestSession.campaignId, {
+    character: payload
+  });
+}
+
+browser.webRequest.onCompleted.addListener(
+  (details) => {
+    if (details.method !== "PUT" && details.method !== "PATCH") return;
+    const m = details.url.match(/\/character\/v5\/character\/(\d+)/);
+    if (!m || !details.tabId || details.tabId < 0) return;
+
+    const characterId = Number(m[1]);
+    const key = `${details.tabId}:${characterId}`;
+
+    clearTimeout(pendingCharacterSyncs.get(key));
+    pendingCharacterSyncs.set(
+      key,
+      setTimeout(() => {
+        pendingCharacterSyncs.delete(key);
+        browser.tabs
+          .sendMessage(details.tabId, { type: "refetch-character", characterId })
+          .catch(() => {});
+      }, 2000)
+    );
+  },
+  { urls: ["https://character-service.dndbeyond.com/*"] }
+);
 
 // ---------------------------------------------------------------------------
 // Session status check (popup polling)
