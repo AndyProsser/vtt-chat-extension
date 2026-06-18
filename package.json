@@ -1,6 +1,6 @@
 {
   "name": "vtt-chat-extension",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Browser extension to launch VTT-Chat sessions from D&D Beyond",
   "type": "module",
   "main": "build.js",
@@ -45,7 +45,7 @@
     "url": "git+https://github.com/andyprosser/vtt-chat-extension.git"
   },
   "author": "Andy Prosser",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "bugs": {
     "url": "https://github.com/andyprosser/vtt-chat-extension/issues"
   },

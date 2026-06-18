@@ -34,6 +34,5 @@ Thumbs.db
 .env.local
 .env.production
 
-# Package lock files (if using npm)
-package-lock.json
+# Package lock files (if using yarn)
 yarn.lock
