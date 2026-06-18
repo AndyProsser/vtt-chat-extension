@@ -130,7 +130,7 @@ VTT-Chat is a companion chat system for tabletop RPG sessions. This extension co
 **What we do not do:**
 
 - Scrape, bulk-collect, or store DDB content beyond what is needed to run a single user's session
-- Modify any DDB data (with the narrow exception of the experimental currency write-back feature, which is opt-in and clearly marked as unofficial)
+- Modify any DDB data (with the narrow exception of the experimental currency write-back feature, which is opt-in and clearly marked as unofficial, nor implemented at this time)
 - Circumvent authentication — we use the user's own session, not bots or scrapers
 - Resell, republish, or cache DDB content
 
