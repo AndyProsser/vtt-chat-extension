@@ -115,6 +115,7 @@ before(async () => {
     tabs: {
       create(opts) { tabsCreated.push(opts); },
       get: async () => ({ url: "https://www.dndbeyond.com/characters/12345" }),
+      query: async () => [],
       sendMessage: async () => {}
     },
     webRequest: { onCompleted: { addListener() {} } }
@@ -299,21 +300,6 @@ test("get-auth-state returns GUEST token after login", async () => {
 // ---------------------------------------------------------------------------
 // Character sync — requires guestSession from guest-login above
 // ---------------------------------------------------------------------------
-
-test("character-update-detected sends sync payload to backend", async () => {
-  resetBetweenTests();
-  dispatch({ type: "character-update-detected", payload: { source: "player", externalCharacterId: "ddb-char-1", level: 6, className: "Ranger", subclass: "Hunter" } });
-  await new Promise(r => setTimeout(r, 10));
-  const call = fetchCalls.find(c => c.url.endsWith("/api/integrations/external/sync"));
-  assert.ok(call);
-  const body = JSON.parse(call.options.body);
-  assert.equal(body.campaignId, "camp-uuid");
-  assert.equal(body.externalSystem, "dndbeyond");
-  assert.equal(body.characterUpdate.externalCharacterId, "ddb-char-1");
-  assert.equal(body.characterUpdate.level, 6);
-  assert.equal(body.characterUpdate.class, "Ranger");
-  assert.equal(body.characterUpdate.subclass, "Hunter");
-});
 
 test("character-data-updated triggers full character sync", async () => {
   resetBetweenTests();

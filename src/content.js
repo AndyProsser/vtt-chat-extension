@@ -128,15 +128,7 @@ function normalizeCharacterList(raw) {
   }));
 }
 
-function sendCharacterSyncUpdate(update) {
-  try {
-    browser.runtime.sendMessage({ type: "character-update-detected", payload: update });
-  } catch {
-    // extension context may be unavailable during page unload
-  }
-}
-
-function emitCharacterDiffs(previousList, nextList, ddbUserId) {
+async function emitCharacterDiffs(previousList, nextList) {
   if (!Array.isArray(previousList) || !Array.isArray(nextList)) return;
   const prevMap = new Map(previousList.map(c => [String(c.id), c]));
   for (const nextChar of nextList) {
@@ -145,13 +137,13 @@ function emitCharacterDiffs(previousList, nextList, ddbUserId) {
     const levelChanged = Number(prevChar.level || 0) !== Number(nextChar.level || 0);
     const classChanged = String(prevChar.class || "") !== String(nextChar.class || "");
     if (!levelChanged && !classChanged) continue;
-    sendCharacterSyncUpdate({
-      source: "player",
-      externalUserId: String(ddbUserId || ""),
-      externalCharacterId: String(nextChar.id),
-      level: typeof nextChar.level === "number" ? nextChar.level : null,
-      className: nextChar.class || null
-    });
+    try {
+      const detailData = await fetchCharacterDetails(nextChar.id);
+      const payload = buildFullCharacterPayload(nextChar, detailData);
+      browser.runtime.sendMessage({ type: "character-data-updated", payload });
+    } catch {
+      // skip — webRequest sync will catch the next DDB write
+    }
   }
 }
 
@@ -300,23 +292,25 @@ function extractCharacterStats(data) {
   // Speed
   const speed = data.race?.weightSpeeds?.normal?.walk || 30;
 
-  // Spell slots — include only levels with at least one slot (regular + pact magic)
-  const spellSlots = {};
-  for (const slot of (data.spellSlots || [])) {
-    const total = (slot.available || 0) + (slot.used || 0);
-    if (total > 0) spellSlots[slot.level] = { total, used: slot.used || 0, available: slot.available || 0 };
+  // Spell slots — { total: { "1": N, … }, used: { "1": N, … } } per doc format
+  function buildSlotMap(source) {
+    const total = {}, used = {};
+    for (const slot of (source || [])) {
+      const t = (slot.available || 0) + (slot.used || 0);
+      if (t > 0) { total[String(slot.level)] = t; used[String(slot.level)] = slot.used || 0; }
+    }
+    return Object.keys(total).length > 0 ? { total, used } : null;
   }
-  for (const slot of (data.pactMagic || [])) {
-    const total = (slot.available || 0) + (slot.used || 0);
-    if (total > 0) spellSlots[`pact${slot.level}`] = { total, used: slot.used || 0, available: slot.available || 0 };
-  }
+  const spellSlots = buildSlotMap(data.spellSlots);
+  const pactMagic  = buildSlotMap(data.pactMagic);
 
   return {
     initiative,
     proficiencyBonus,
     passivePerception,
     abilityScores,
-    spellSlots: Object.keys(spellSlots).length > 0 ? spellSlots : null,
+    spellSlots,
+    pactMagic,
     hp: { current: currentHp, max: maxHp, temp: data.temporaryHitPoints || 0 },
     ac,
     speed
@@ -324,7 +318,10 @@ function extractCharacterStats(data) {
 }
 
 function extractConditions(data) {
-  return (data.conditions || []).map(c => CONDITION_NAMES[c.id] || String(c.id));
+  return (data.conditions || []).map(c => {
+    const name = CONDITION_NAMES[c.id] || `Condition ${c.id}`;
+    return c.level ? `${name} ${c.level}` : name;
+  });
 }
 
 function extractFeatures(data) {
@@ -547,7 +544,7 @@ async function ensureDdbCache() {
 
     const rawList = await fetchCharacterList(user.id);
     const characterList = normalizeCharacterList(rawList);
-    emitCharacterDiffs(ddbCharacterList, characterList, user.id);
+    await emitCharacterDiffs(ddbCharacterList, characterList);
     await browser.storage.local.set({
       ddbUser: user,
       ddbCharacterList: characterList,

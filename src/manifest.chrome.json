@@ -10,7 +10,8 @@
   "permissions": [
     "storage",
     "cookies",
-    "webRequest"
+    "webRequest",
+    "tabs"
   ],
   "host_permissions": [
     "https://www.dndbeyond.com/*",

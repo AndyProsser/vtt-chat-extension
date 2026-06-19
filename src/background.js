@@ -39,11 +39,6 @@ browser.runtime.onMessage.addListener((msg) => {
     return getAuthStateForPopup();
   }
 
-  if (msg.type === "character-update-detected") {
-    void handleCharacterUpdate(msg.payload || {});
-    return;
-  }
-
   if (msg.type === "character-data-updated") {
     void handleCharacterDataUpdated(msg.payload || {});
     return;
@@ -665,6 +660,10 @@ async function runGuestLoginAndLaunch(payload) {
     await syncCharacterAndCampaign(server, loginResult.token, campaignId, payload);
   }
 
+  void triggerInitialCharacterSync(
+    guestSession?.character?.externalCharacterId || payload.externalCharacterId
+  );
+
   const session = campaignId ? await ensureSession(server, loginResult.token, campaignId) : null;
   await launchTab(server, campaignId, loginResult.token, session?.sessionId || null);
   return loginResult;
@@ -685,6 +684,8 @@ async function runFullLoginAndLaunch(payload) {
       campaignPacket: buildCampaignPacketFromPayload(payload, state.ddbActiveContext)
     });
   }
+
+  void triggerInitialCharacterSync(payload.character?.externalCharacterId);
 
   const session = campaignId ? await ensureSession(server, loginResult.token, campaignId) : null;
   await launchTab(server, campaignId, loginResult.token, session?.sessionId || null);
@@ -708,34 +709,20 @@ async function getAuthStateForPopup() {
 }
 
 // ---------------------------------------------------------------------------
-// Live character update (content script diff detection)
+// Initial full character sync (broadcast to all open DDB tabs)
 // ---------------------------------------------------------------------------
 
-async function handleCharacterUpdate(payload) {
-  const server = await getActiveServer();
-  if (!server || !guestSession?.token) return;
-
-  const token = await ensureRenewedGuestToken(server);
-  if (!token || !guestSession?.campaignId || !payload.externalCharacterId) return;
-
-  await apiJson(server, "/api/integrations/external/sync", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify({
-      campaignId: guestSession.campaignId,
-      externalSystem: EXTERNAL_SYSTEM,
-      source: payload.source === "dm" ? "dm" : "player",
-      characterUpdate: {
-        externalCharacterId: String(payload.externalCharacterId),
-        level: typeof payload.level === "number" ? payload.level : undefined,
-        class: payload.className || undefined,
-        subclass: payload.subclass || undefined
-      }
-    })
-  });
+async function triggerInitialCharacterSync(characterId) {
+  if (!characterId) return;
+  const id = Number(characterId);
+  try {
+    const tabs = await browser.tabs.query({});
+    for (const tab of tabs) {
+      browser.tabs.sendMessage(tab.id, { type: "refetch-character", characterId: id }).catch(() => {});
+    }
+  } catch {
+    // tabs API unavailable in this context — skip
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -933,6 +920,11 @@ async function handleConnect(payload) {
       || preflightResult.invite?.campaign?.id;
     if (token && campaignId) {
       await syncCharacterAndCampaign(server, token, campaignId, payload);
+      void triggerInitialCharacterSync(
+        guestSession?.character?.externalCharacterId ||
+        payload.character?.ddbCharacterId ||
+        payload.character?.externalCharacterId
+      );
       const session = await ensureSession(server, token, campaignId);
       await launchTab(server, campaignId, token, session?.sessionId || null);
     }
@@ -971,6 +963,12 @@ async function handleConnect(payload) {
   if (campaignId) {
     await syncCharacterAndCampaign(server, loginResult.token, campaignId, payload);
   }
+
+  void triggerInitialCharacterSync(
+    guestSession?.character?.externalCharacterId ||
+    payload.character?.ddbCharacterId ||
+    payload.character?.externalCharacterId
+  );
 
   const session = campaignId ? await ensureSession(server, loginResult.token, campaignId) : null;
   await launchTab(server, campaignId, loginResult.token, session?.sessionId || null);

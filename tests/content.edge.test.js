@@ -137,8 +137,8 @@ before(async () => {
 // ---------------------------------------------------------------------------
 
 test("ensureDdbCache uses Cobalt user when mega-menu absent", () => {
-  const syncMsg = messages.find(m => m.type === "character-update-detected");
-  assert.ok(syncMsg, "Expected character-update-detected from Cobalt user path");
+  const syncMsg = messages.find(m => m.type === "character-data-updated");
+  assert.ok(syncMsg, "Expected character-data-updated from Cobalt user path");
   assert.equal(syncMsg.payload.externalCharacterId, String(charId));
   assert.equal(syncMsg.payload.level, 3);
 });

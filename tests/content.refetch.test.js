@@ -45,6 +45,7 @@ const SILK = {
 };
 
 const SILK_DAMAGED = { ...SILK, removedHitPoints: 8, conditions: [{ id: 11 }] };
+const SILK_EXHAUSTED = { ...SILK, conditions: [{ id: 4, level: 2 }] };
 
 // Barbarian L1 — Unarmored Defense (CON). AC = 10 + DEX(+2) + CON(+3) = 15
 const BARBARIAN = {
@@ -184,9 +185,9 @@ before(async () => {
 // IIFE — ensureDdbCache detects level change (checked first, runs from before())
 // ---------------------------------------------------------------------------
 
-test("ensureDdbCache detects level-up and emits character-update-detected", () => {
-  const syncMsg = messages.find(m => m.type === "character-update-detected");
-  assert.ok(syncMsg, "Expected character-update-detected for level change");
+test("ensureDdbCache detects level-up and emits character-data-updated with full payload", () => {
+  const syncMsg = messages.find(m => m.type === "character-data-updated");
+  assert.ok(syncMsg, "Expected character-data-updated for level change");
   assert.equal(syncMsg.payload.externalCharacterId, "999");
   assert.equal(syncMsg.payload.level, 4);
 });
@@ -220,8 +221,10 @@ test("handleRefetchCharacter builds correct stats for Silk (AC=14, HP=23, initia
   assert.deepEqual(payload.stats.abilityScores, { str: 10, dex: 16, con: 10, int: 8, wis: 14, cha: 17 });
   assert.deepEqual(payload.conditions, []);
   assert.deepEqual(payload.features, ["Eldritch Blast"]);
-  assert.ok(payload.stats.spellSlots?.pact2, "Expected pact magic slots");
-  assert.equal(payload.stats.spellSlots.pact2.total, 2);
+  assert.ok(payload.stats.pactMagic, "Expected pact magic slots");
+  assert.equal(payload.stats.pactMagic.total["2"], 2);
+  assert.equal(payload.stats.pactMagic.used["2"], 0);
+  assert.equal(payload.stats.spellSlots, null);
   assert.equal(payload.inventory.items.length, 1);
   assert.equal(payload.inventory.items[0].name, "Leather Armor");
   assert.deepEqual(payload.inventory.currency, { cp: 5, sp: 10, gp: 50, ep: 0, pp: 1 });
@@ -245,6 +248,25 @@ test("handleRefetchCharacter reflects damaged HP and active conditions", async (
   assert.ok(msg);
   assert.equal(msg.payload.stats.hp.current, 15); // 23 - 8
   assert.deepEqual(msg.payload.conditions, ["Poisoned"]);
+});
+
+test("handleRefetchCharacter includes Exhaustion level in conditions", async () => {
+  resetBetweenTests();
+  const characterId = 12345;
+  storageData.ddbCharacterList = [{ id: characterId, name: "Silk", level: 4, race: "Elf", class: "Warlock", avatar: null, campaignId: "c1" }];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("cobalt-token"))                return { ok: true, json: async () => ({ token: "tok" }) };
+    if (u.includes(`/character/${characterId}`))   return { ok: true, json: async () => ({ data: SILK_EXHAUSTED }) };
+    return { ok: false, json: async () => ({}) };
+  };
+
+  dispatch({ type: "refetch-character", characterId });
+  await new Promise(r => setTimeout(r, 60));
+
+  const msg = messages.find(m => m.type === "character-data-updated");
+  assert.ok(msg);
+  assert.deepEqual(msg.payload.conditions, ["Exhaustion 2"]);
 });
 
 test("handleRefetchCharacter sends nothing when character is not in list", async () => {
@@ -296,10 +318,10 @@ test("handleRefetchCharacter maps standard spell slots for Wizard", async () => 
 
   const slots = messages.find(m => m.type === "character-data-updated")?.payload?.stats?.spellSlots;
   assert.ok(slots, "Expected spell slots");
-  assert.equal(slots["1"].total, 4);
-  assert.equal(slots["1"].used,  2);
-  assert.equal(slots["2"].total, 3);
-  assert.equal(slots["2"].used,  1);
-  assert.equal(slots["3"].total, 2);
-  assert.equal(slots["3"].used,  0);
+  assert.equal(slots.total["1"], 4);
+  assert.equal(slots.used["1"],  2);
+  assert.equal(slots.total["2"], 3);
+  assert.equal(slots.used["2"],  1);
+  assert.equal(slots.total["3"], 2);
+  assert.equal(slots.used["3"],  0);
 });
