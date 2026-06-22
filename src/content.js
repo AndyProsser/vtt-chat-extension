@@ -473,12 +473,14 @@ function injectCharacterInfoButtons(characterList) {
       link.parentElement;
     if (!card) return;
 
+    console.assert(card);
+
     const btn = document.createElement("button");
     btn.id = buttonId;
     btn.textContent = "INFO";
     btn.title = "Copy character JSON to clipboard (VTT-Chat)";
     btn.style.cssText =
-      "position:absolute;top:6px;right:6px;padding:2px 8px;font-size:11px;" +
+      "position:absolute;top:-45px;right:1px;padding:2px 8px;font-size:11px;" +
       "font-weight:600;background:#1a3a6b;color:#fff;border:none;" +
       "border-radius:3px;cursor:pointer;z-index:9999;opacity:0.85;";
     btn.addEventListener("mouseenter", () => { btn.style.opacity = "1"; });
