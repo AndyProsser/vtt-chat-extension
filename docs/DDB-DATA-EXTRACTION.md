@@ -504,23 +504,51 @@ For multiclass characters this misses additional classes and their subclasses. T
 
 ## Class Features (for `features` field)
 
-Active class features that are displayed on the character sheet come from:
+Active class features come from `char.actions.class` (things the character can *do*) and `char.options.class` (things the character has *chosen*, e.g. Eldritch Invocations, Metamagic). These are combined and deduplicated.
 
-```text
-char.classes[].classFeatures[].definition.name
-```
+### The orphan action problem
 
-Filter out features that are hidden in the sheet builder:
+`char.actions.class` contains entries that have no corresponding class feature or chosen option on the character — notably the **Circle Magic** actions (`Initiate a Circle Spell`, `Circle Spell: Augment`, etc.) which DDB injects for all spellcasters regardless of selection. These must be filtered out.
+
+**How to identify orphaned actions:** each action has a `componentId` which should equal either:
+
+- the `definition.id` of one of the character's `classFeatures[]`, or
+- the `definition.id` of a chosen `options.class[]` entry (e.g. a specific Metamagic option)
+
+Actions whose `componentId` matches neither are orphans and should be dropped.
 
 ```js
-const features = char.classes
-  .flatMap((cls) => cls.classFeatures || [])
-  .filter((f) => !f.definition?.hideInSheet)
-  .map((f) => f.definition?.name)
-  .filter(Boolean);
+// Build the valid ID set
+const validIds = new Set(
+  [
+    ...(char.classes || []).flatMap(cls =>
+      (cls.classFeatures || []).map(f => f.definition?.id)
+    ),
+    ...(char.options?.class || []).map(o => o.definition?.id)
+  ].filter(Boolean)
+);
+
+const seen = new Set();
+const features = [];
+const push = name => { if (name && !seen.has(name)) { seen.add(name); features.push(name); } };
+
+// actions.class — filter to known components only
+for (const a of (char.actions?.class || [])) {
+  if (validIds.has(a.componentId)) push(a.name);
+}
+// options.class — always valid (they are explicitly chosen by the player)
+for (const o of (char.options?.class || [])) push(o.definition?.name);
 ```
 
-> This is a first-pass implementation. Not all entries in `classFeatures` represent discrete in-session features (some are passive proficiencies). Further filtering may be needed.
+### Verified results across sample characters
+
+| Character               | actions.class | Circle orphans filtered | Net features |
+| ----------------------- | ------------- | ----------------------- | ------------ |
+| Silk (Warlock L4)       | 10            | 7                       | 3 + 3 opts   |
+| Liath (Sorcerer L4)     | 14            | 7                       | 7 + 3 opts   |
+| Sensei (Monk 5/Rogue 3) | 19            | 0                       | 19           |
+
+> `options.class` entries for Metamagic (e.g. Twinned Spell) use the option's own `definition.id` (not the classFeature ID) as their `componentId` in `actions.class`. Including `options.class` ids in `validIds` correctly retains these while still blocking the Circle orphans.
 
 ---
 

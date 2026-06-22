@@ -325,10 +325,24 @@ function extractConditions(data) {
 }
 
 function extractFeatures(data) {
+  // Build valid component ID set: classFeature IDs + chosen option IDs.
+  // DDB injects actions.class entries (e.g. Circle Magic) whose componentId
+  // doesn't match any feature or chosen option the character actually has.
+  const validIds = new Set(
+    [
+      ...(data.classes || []).flatMap(cls =>
+        (cls.classFeatures || []).map(f => f.definition?.id)
+      ),
+      ...(data.options?.class || []).map(o => o.definition?.id)
+    ].filter(Boolean)
+  );
+
   const seen = new Set();
   const features = [];
   const push = name => { if (name && !seen.has(name)) { seen.add(name); features.push(name); } };
-  for (const a of (data.actions?.class || []))  push(a.name);
+  for (const a of (data.actions?.class || []))  {
+    if (validIds.has(a.componentId)) push(a.name);
+  }
   for (const o of (data.options?.class || []))  push(o.definition?.name);
   return features;
 }
