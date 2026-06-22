@@ -368,9 +368,15 @@ function extractInventory(data) {
 }
 
 function buildFullCharacterPayload(listChar, detailData) {
-  const subclass = detailData?.classes?.[0]?.subclassDefinition?.name || null;
   const race = detailData?.race?.fullName || listChar.race || null;
   const stats = extractCharacterStats(detailData);
+  const rawClasses = detailData?.classes || [];
+  const classes = rawClasses.map(cls => ({
+    classId: cls.definition.id,
+    className: cls.definition.name,
+    classLevel: cls.level,
+    subclassName: cls.subclassDefinition?.name ?? null
+  }));
 
   return {
     ddbCharacterId: listChar.id,
@@ -378,8 +384,10 @@ function buildFullCharacterPayload(listChar, detailData) {
     name: listChar.name,
     race,
     class: listChar.class || null,
-    subclass,
+    subclass: rawClasses[0]?.subclassDefinition?.name || null,
     level: listChar.level,
+    multiclass: classes.length > 1,
+    classes: classes.length ? classes : undefined,
     avatarUrl: listChar.avatar || detailData?.avatarUrl || null,
     characterUrl: `https://www.dndbeyond.com/characters/${listChar.id}`,
     stats: stats || undefined,

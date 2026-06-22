@@ -288,6 +288,8 @@ async function syncCharacterAndCampaign(server, token, campaignId, payload) {
     class: character.class || undefined,
     subclass: character.subclass || undefined,
     level: typeof character.level === "number" ? character.level : undefined,
+    multiclass: typeof character.multiclass === "boolean" ? character.multiclass : undefined,
+    classes: Array.isArray(character.classes) ? character.classes : undefined,
     avatarUrl: avatarUrl || undefined,
     characterUrl: character.characterUrl || undefined,
     stats: character.stats || undefined,

@@ -701,15 +701,35 @@ After the debounce window the background runs four checks in order. If any fails
 
 All fields derived from the character detail endpoint are refreshed on each sync cycle:
 
-| Field                        | Driven by                                |
-| ---------------------------- | ---------------------------------------- |
-| `stats.hp`                   | `removedHitPoints`, `temporaryHitPoints` |
-| `stats.ac`                   | Currently equipped armor and shield      |
-| `stats.initiative`           | DEX mod + initiative modifiers           |
-| `stats.spellSlots`           | `spellSlots[]` / `pactMagic[]`           |
-| `conditions`                 | `char.conditions[]`                      |
-| `features`                   | Class action features                    |
-| `level`, `class`, `subclass` | `char.classes[]`                         |
+| Field                         | Driven by                                       |
+| ----------------------------- | ----------------------------------------------- |
+| `stats.hp`                    | `removedHitPoints`, `temporaryHitPoints`        |
+| `stats.ac`                    | Currently equipped armor and shield             |
+| `stats.initiative`            | DEX mod + initiative modifiers                  |
+| `stats.spellSlots`            | `spellSlots[]` / `pactMagic[]`                  |
+| `conditions`                  | `char.conditions[]`                             |
+| `features`                    | Class action features                           |
+| `level`, `class`, `subclass`  | `char.classes[]` (primary class, legacy fields) |
+| `multiclass`                  | `true` when `char.classes.length > 1`           |
+| `classes[]`                   | Full per-class breakdown — see below            |
+
+#### `classes[]` payload shape
+
+```json
+[
+  { "classId": 2190880, "className": "Monk",  "classLevel": 5, "subclassName": "Warrior of the Open Hand" },
+  { "classId": 2190883, "className": "Rogue", "classLevel": 3, "subclassName": "Thief" }
+]
+```
+
+| Field          | Source                                          | Notes                              |
+| -------------- | ----------------------------------------------- | ---------------------------------- |
+| `classId`      | `cls.definition.id`                             | Stable DDB class type ID           |
+| `className`    | `cls.definition.name`                           |                                    |
+| `classLevel`   | `cls.level`                                     | Level in this class only           |
+| `subclassName` | `cls.subclassDefinition?.name`                  | `null` until class reaches level 3 |
+
+Array is ordered starting class first (matches `char.classes[]` order). Omitted from the payload when no detail data is available (e.g. the lightweight `selectedCharacter` fallback in guest-login).
 
 > **Note:** `inventory` is extracted by `buildFullCharacterPayload` but is not currently included in the VTT-Chat sync payload sent by `syncCharacterAndCampaign`.
 
