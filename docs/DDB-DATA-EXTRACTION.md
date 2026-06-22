@@ -415,6 +415,93 @@ Both sample characters had empty condition arrays.
 
 ---
 
+## Multiclass Characters
+
+A multiclass character has more than one entry in `char.classes[]`. The array is ordered: the starting class is always first (`isStartingClass: true`); additional classes follow in the order they were taken.
+
+### `char.classes[]` entry shape
+
+| Field                              | Type         | Notes                                                            |
+| ---------------------------------- | ------------ | ---------------------------------------------------------------- |
+| `id`                               | number       | Instance ID — matches `classSpells[].characterClassId`           |
+| `level`                            | number       | Level in **this** class only                                     |
+| `isStartingClass`                  | boolean      | `true` for the primary class; `false` for all additional classes |
+| `definition.id`                    | number       | Class type ID (stable across characters)                         |
+| `definition.name`                  | string       | Class name e.g. `"Monk"`, `"Rogue"`                              |
+| `definition.hitDice`               | number       | Hit die size e.g. `8` for d8                                     |
+| `subclassDefinition`               | object\|null | `null` until the class reaches level 3                           |
+| `subclassDefinition.id`            | number       | Subclass type ID                                                 |
+| `subclassDefinition.name`          | string       | Subclass name e.g. `"Warrior of the Open Hand"`, `"Thief"`      |
+| `subclassDefinition.parentClassId` | number       | Matches `definition.id` of the parent class                      |
+
+### Example — Sensei (Monk 5 / Rogue 3)
+
+```json
+[
+  {
+    "id": 228161128,
+    "level": 5,
+    "isStartingClass": true,
+    "definition": { "id": 2190880, "name": "Monk", "hitDice": 8 },
+    "subclassDefinition": {
+      "id": 2190975,
+      "name": "Warrior of the Open Hand",
+      "parentClassId": 2190880
+    }
+  },
+  {
+    "id": 232959736,
+    "level": 3,
+    "isStartingClass": false,
+    "definition": { "id": 2190883, "name": "Rogue", "hitDice": 8 },
+    "subclassDefinition": {
+      "id": 2190987,
+      "name": "Thief",
+      "parentClassId": 2190883
+    }
+  }
+]
+```
+
+### Extraction rules
+
+```js
+// Primary class (always first, always isStartingClass: true)
+const primaryClass = char.classes[0];
+
+// All classes in display order
+const classes = char.classes.map((cls) => ({
+  name: cls.definition.name,
+  level: cls.level,
+  subclass: cls.subclassDefinition?.name ?? null,  // null until class level ≥ 3
+}));
+
+// Total level for proficiency bonus and HP calculations (unchanged)
+const totalLevel = char.classes.reduce((sum, cls) => sum + cls.level, 0);
+```
+
+### What does NOT change for multiclass
+
+- **Modifiers** — `char.modifiers` already aggregates modifiers from all classes into the `class` bucket; the flat-scan approach is correct as-is.
+- **HP** — `baseHitPoints` already reflects the hit dice total across all classes; the `CON_MOD × totalLevel` formula is unchanged.
+- **Proficiency bonus** — uses `totalLevel` which is already summed across classes.
+- **Spell slots** — `char.spellSlots[]` and `char.pactMagic[]` are character-level arrays and already reflect the combined multiclass slot table.
+- **`classSpells[]`** — one entry per class instance; keyed by `characterClassId` which maps to `classes[].id` (the instance ID, not `definition.id`).
+
+### Current limitation in `buildFullCharacterPayload`
+
+The sync payload currently reads only the first class:
+
+```js
+// Line 371 — only captures primary class subclass
+const subclass = detailData?.classes?.[0]?.subclassDefinition?.name || null;
+// class field comes from listChar.classDescription (character list endpoint string)
+```
+
+For multiclass characters this misses additional classes and their subclasses. The backend payload will need a `classes[]` array rather than flat `class`/`subclass` fields.
+
+---
+
 ## Class Features (for `features` field)
 
 Active class features that are displayed on the character sheet come from:
