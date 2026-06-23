@@ -413,6 +413,8 @@ function buildFullCharacterPayload(listChar, detailData) {
 
 //
 // 4. CAMPAIGN API SUPPORT
+// Campaign List for User (MUST cache for 24 hrs or risk being flagged as BOT)
+// https://www.dndbeyond.com/api/campaign/stt/user-campaigns
 //
 async function fetchCampaignDetails(campaignId) {
   const headers = await buildAuthHeaders();

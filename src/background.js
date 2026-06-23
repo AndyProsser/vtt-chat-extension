@@ -297,14 +297,14 @@ async function syncCharacterAndCampaign(server, token, campaignId, payload) {
     features: Array.isArray(character.features) ? character.features : undefined
   } : undefined;
 
-  const inventoryUpdate = character ? {
+  const inventoryUpdate = (character && character.inventory) ? {
     externalCharacterId: String(character.externalCharacterId || character.ddbCharacterId || ""),
-    items: Array.isArray(character.inventory?.items) ? character.inventory.items : undefined
+    items: Array.isArray(character.inventory.items) ? character.inventory.items : undefined
   } : undefined;
 
-  const currencyUpdate = character ? {
+  const currencyUpdate = (character && character.inventory) ? {
     externalCharacterId: String(character.externalCharacterId || character.ddbCharacterId || ""),
-    currency: Array.isArray(character.inventory?.currency) ? character.inventory.currency : undefined
+    currency: character.inventory.currency || undefined
   } : undefined;
 
   if (characterUpdate && !characterUpdate.externalCharacterId) return;
