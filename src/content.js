@@ -416,6 +416,31 @@ function buildFullCharacterPayload(listChar, detailData) {
 // Campaign List for User (MUST cache for 24 hrs or risk being flagged as BOT)
 // https://www.dndbeyond.com/api/campaign/stt/user-campaigns
 //
+
+// Fetches campaigns owned by the logged-in user (DM role). Must be cached ≥24h.
+async function fetchUserCampaigns() {
+  const headers = await buildAuthHeaders();
+  if (!headers.Authorization) return null;
+  const res = await fetch("https://www.dndbeyond.com/api/campaign/stt/user-campaigns", {
+    method: "GET",
+    headers,
+    credentials: "include"
+  });
+  if (!res.ok) return null;
+  const json = await res.json();
+  const data = json.data ?? json;
+  return Array.isArray(data) ? data : null;
+}
+
+function normalizeOwnedCampaigns(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(c => ({
+    id: c.id,
+    name: c.name || null,
+    memberCount: c.memberCount ?? null
+  }));
+}
+
 async function fetchCampaignDetails(campaignId) {
   const headers = await buildAuthHeaders();
   if (!headers.Authorization) return null;
@@ -547,35 +572,52 @@ async function handleRefetchCharacter(characterId) {
 // 8. CACHE + OBSERVER
 //
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const CAMPAIGN_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 async function ensureDdbCache() {
-  const { ddbUser, ddbCharacterList, ddbCacheUpdatedAt } = await browser.storage.local.get([
-    "ddbUser",
-    "ddbCharacterList",
-    "ddbCacheUpdatedAt"
+  const {
+    ddbUser, ddbCharacterList, ddbCacheUpdatedAt,
+    ddbCampaignsCacheUpdatedAt
+  } = await browser.storage.local.get([
+    "ddbUser", "ddbCharacterList", "ddbCacheUpdatedAt",
+    "ddbCampaignsCacheUpdatedAt"
   ]);
 
-  if (ddbUser && ddbCacheUpdatedAt && Date.now() - ddbCacheUpdatedAt < CACHE_TTL_MS) return;
+  const userCacheStale = !ddbUser || !ddbCacheUpdatedAt || Date.now() - ddbCacheUpdatedAt >= CACHE_TTL_MS;
+  const campaignCacheStale = !ddbCampaignsCacheUpdatedAt || Date.now() - ddbCampaignsCacheUpdatedAt >= CAMPAIGN_CACHE_TTL_MS;
+
+  if (!userCacheStale && !campaignCacheStale) return;
 
   try {
-    const user = extractDdbUser();
-    if (!user) {
-      await browser.storage.local.set({
-        ddbUser: null,
-        ddbCharacterList: null,
-        ddbCacheUpdatedAt: Date.now()
-      });
-      return;
+    if (userCacheStale) {
+      const user = extractDdbUser();
+      if (!user) {
+        await browser.storage.local.set({
+          ddbUser: null,
+          ddbCharacterList: null,
+          ddbCacheUpdatedAt: Date.now()
+        });
+      } else {
+        const rawList = await fetchCharacterList(user.id);
+        const characterList = normalizeCharacterList(rawList);
+        await emitCharacterDiffs(ddbCharacterList, characterList);
+        await browser.storage.local.set({
+          ddbUser: user,
+          ddbCharacterList: characterList,
+          ddbCacheUpdatedAt: Date.now()
+        });
+      }
     }
 
-    const rawList = await fetchCharacterList(user.id);
-    const characterList = normalizeCharacterList(rawList);
-    await emitCharacterDiffs(ddbCharacterList, characterList);
-    await browser.storage.local.set({
-      ddbUser: user,
-      ddbCharacterList: characterList,
-      ddbCacheUpdatedAt: Date.now()
-    });
+    if (campaignCacheStale) {
+      const rawCampaigns = await fetchUserCampaigns();
+      if (rawCampaigns !== null) {
+        await browser.storage.local.set({
+          ddbOwnedCampaigns: normalizeOwnedCampaigns(rawCampaigns),
+          ddbCampaignsCacheUpdatedAt: Date.now()
+        });
+      }
+    }
   } catch (e) {
     console.warn("[VTT-Chat] Cache refresh failed:", e);
   }

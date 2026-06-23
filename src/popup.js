@@ -13,6 +13,9 @@ const sessionStatuses = {};
 let expandedCharId = null;
 let expandedMode = null; // "join" | "password"
 
+// Which DM campaign's expand form is currently open
+let expandedDmCampaignId = null;
+
 // ---------------------------------------------------------------------------
 // Invite URL parsing
 // ---------------------------------------------------------------------------
@@ -34,7 +37,8 @@ async function getState() {
   const defaults = {
     servers: [], activeServerId: null, lastSession: null,
     ddbUser: null, ddbCharacterList: null,
-    savedEmail: "", campaignConnections: []
+    savedEmail: "", campaignConnections: [],
+    ddbOwnedCampaigns: [], dmConnections: []
   };
   const data = await browser.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...data };
@@ -89,6 +93,28 @@ async function deleteCampaignConnection(connId) {
 
 function findConn(connections, ddbCharacterId) {
   return connections.find(c => c.ddbCharacterId === ddbCharacterId) || null;
+}
+
+async function saveDmConnection({ ddbCampaignId, serverUrl, inviteCode, inviteUrl, campaignName }) {
+  const serverId = await ensureServer(serverUrl);
+  const { dmConnections: conns } = await getState();
+  const existing = conns.find(c => c.ddbCampaignId === ddbCampaignId);
+  const conn = {
+    id: existing?.id ?? crypto.randomUUID(),
+    serverId, serverUrl, inviteCode, inviteUrl,
+    ddbCampaignId,
+    campaignName: campaignName || existing?.campaignName || null,
+    lastConnectedAt: Date.now()
+  };
+  const next = existing
+    ? conns.map(c => c.ddbCampaignId === ddbCampaignId ? conn : c)
+    : [...conns, conn];
+  await saveState({ dmConnections: next, savedInviteCode: inviteCode });
+  return conn;
+}
+
+function findDmConn(dmConnections, ddbCampaignId) {
+  return dmConnections.find(c => c.ddbCampaignId === ddbCampaignId) || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +240,131 @@ function renderCharacters(ddbCharacterList, campaignConnections) {
       applyExpandMode(expandedCharId, expandedMode);
     }
   }
+}
+
+function renderDmCampaigns(ddbOwnedCampaigns, dmConnections) {
+  const section = byId("dm-section");
+  const container = byId("dm-campaign-list");
+
+  if (!ddbOwnedCampaigns?.length) {
+    section.style.display = "none";
+    return;
+  }
+
+  section.style.display = "block";
+  container.innerHTML = "";
+
+  for (const campaign of ddbOwnedCampaigns) {
+    const conn = findDmConn(dmConnections, campaign.id);
+    container.appendChild(buildDmCard(campaign, conn));
+    container.appendChild(buildDmExpandForm(campaign, conn));
+  }
+
+  if (expandedDmCampaignId != null) {
+    const card = document.querySelector(`.char-card[data-dm-campaign-id="${expandedDmCampaignId}"]`);
+    const form = byId(`dm-expand-form-${expandedDmCampaignId}`);
+    if (card && form) {
+      card.classList.add("selected");
+      form.classList.add("open");
+    }
+  }
+}
+
+function buildDmCard(campaign, conn) {
+  const card = document.createElement("div");
+  card.className = "char-card";
+  card.dataset.dmCampaignId = String(campaign.id);
+
+  const badge = document.createElement("div");
+  badge.className = "dm-badge";
+  badge.textContent = "DM";
+
+  const info = document.createElement("div");
+  info.className = "char-info";
+
+  const nameEl = document.createElement("div");
+  nameEl.className = "char-name";
+  nameEl.textContent = campaign.name || `Campaign #${campaign.id}`;
+  info.appendChild(nameEl);
+
+  const det = document.createElement("div");
+  det.className = "char-detail";
+  det.textContent = campaign.memberCount != null
+    ? `${campaign.memberCount} member${campaign.memberCount !== 1 ? "s" : ""}`
+    : "Dungeon Master";
+  info.appendChild(det);
+
+  if (conn) {
+    const camp = document.createElement("div");
+    camp.className = "char-campaign";
+    camp.textContent = conn.campaignName || conn.serverUrl;
+    info.appendChild(camp);
+  }
+
+  const right = document.createElement("div");
+  right.className = "char-right";
+
+  if (conn) {
+    const editBtn = document.createElement("button");
+    editBtn.className = "char-edit-btn";
+    editBtn.title = "Change connection";
+    editBtn.textContent = "✎";
+    editBtn.addEventListener("click", e => {
+      e.stopPropagation();
+      toggleDmExpand(campaign.id);
+    });
+    right.appendChild(editBtn);
+  }
+
+  card.appendChild(badge);
+  card.appendChild(info);
+  card.appendChild(right);
+
+  card.addEventListener("click", () => handleDmCardClick(campaign, conn));
+  return card;
+}
+
+function buildDmExpandForm(campaign, conn) {
+  const wrap = document.createElement("div");
+  wrap.className = "char-expand-form";
+  wrap.id = `dm-expand-form-${campaign.id}`;
+
+  const urlLabel = document.createElement("label");
+  urlLabel.textContent = "Invite URL";
+  const urlInput = document.createElement("input");
+  urlInput.type = "url";
+  urlInput.id = `dm-invite-url-${campaign.id}`;
+  urlInput.placeholder = "https://server/join/CODE";
+  urlInput.autocomplete = "off";
+  if (conn?.inviteUrl) urlInput.value = conn.inviteUrl;
+  urlLabel.appendChild(urlInput);
+  wrap.appendChild(urlLabel);
+
+  const preview = document.createElement("div");
+  preview.className = "url-preview";
+  preview.id = `dm-url-preview-${campaign.id}`;
+  wrap.appendChild(preview);
+
+  if (conn) {
+    const hint = document.createElement("div");
+    hint.style.cssText = "font-size:10px;color:#555;margin-top:4px;";
+    hint.textContent = `Current: ${conn.campaignName || conn.serverUrl} — paste a new URL to switch.`;
+    wrap.appendChild(hint);
+  }
+
+  const launchBtn = document.createElement("button");
+  launchBtn.className = "btn-primary mt8";
+  launchBtn.id = `dm-launch-btn-${campaign.id}`;
+  launchBtn.textContent = conn ? "Update & Launch as DM" : "Connect & Launch as DM";
+  wrap.appendChild(launchBtn);
+
+  setTimeout(() => {
+    urlInput.addEventListener("input", () => updatePreview(urlInput.value, preview));
+    if (urlInput.value) updatePreview(urlInput.value, preview);
+    launchBtn.addEventListener("click", () => handleDmJoinLaunch(campaign, urlInput));
+  }, 0);
+
+  return wrap;
 }
 
 function buildCard(char, conn, status) {
@@ -420,6 +571,23 @@ function toggleExpand(charId, conn, mode) {
   setTimeout(() => byId(focusId)?.focus(), 50);
 }
 
+function toggleDmExpand(campaignId) {
+  const alreadyOpen = expandedDmCampaignId === campaignId;
+
+  if (expandedDmCampaignId != null) {
+    byId(`dm-expand-form-${expandedDmCampaignId}`)?.classList.remove("open");
+    document.querySelector(`.char-card[data-dm-campaign-id="${expandedDmCampaignId}"]`)?.classList.remove("selected");
+  }
+  expandedDmCampaignId = null;
+
+  if (alreadyOpen) return;
+
+  expandedDmCampaignId = campaignId;
+  byId(`dm-expand-form-${campaignId}`)?.classList.add("open");
+  document.querySelector(`.char-card[data-dm-campaign-id="${campaignId}"]`)?.classList.add("selected");
+  setTimeout(() => byId(`dm-invite-url-${campaignId}`)?.focus(), 50);
+}
+
 // ---------------------------------------------------------------------------
 // Card click handling
 // ---------------------------------------------------------------------------
@@ -445,6 +613,46 @@ async function handleCardClick(char, conn) {
   card?.classList.add("launching");
   showStatus("Connecting…", "info");
   await launchConnected(char, conn, card);
+}
+
+async function handleDmCardClick(campaign, conn) {
+  if (expandedDmCampaignId === campaign.id) {
+    toggleDmExpand(campaign.id);
+    return;
+  }
+
+  if (!conn) {
+    toggleDmExpand(campaign.id);
+    return;
+  }
+
+  // Has a saved connection → launch directly
+  const card = document.querySelector(`.char-card[data-dm-campaign-id="${campaign.id}"]`);
+  card?.classList.add("launching");
+  showStatus("Connecting as DM…", "info");
+
+  const state = await getState();
+  if (!state.ddbUser?.id) {
+    showStatus("No D&D Beyond user detected — open a D&D Beyond page first.", "error");
+    card?.classList.remove("launching");
+    return;
+  }
+
+  await ensureServer(conn.serverUrl);
+  const email = resolveEmail(state);
+  const pre = await browser.runtime.sendMessage({
+    type: "run-preflight",
+    payload: { inviteCode: conn.inviteCode, email, externalUserId: String(state.ddbUser.id) }
+  });
+
+  if (!pre?.ok) {
+    showStatus(pre?.error || "Could not reach the server.", "error");
+    card?.classList.remove("launching");
+    return;
+  }
+
+  const campaignName = pre.invite?.campaign?.name || conn.campaignName || "";
+  await doGuestLaunchAsDm(campaign, state, email, conn.inviteCode, campaignName);
 }
 
 async function launchConnected(char, conn, card) {
@@ -548,6 +756,85 @@ async function handleJoinLaunch(char, urlInput) {
   const freshState = await getState();
   await doGuestLaunch(char, freshState, email, parsed.inviteCode, campaignName || "");
   if (btn) btn.disabled = false;
+}
+
+// ---------------------------------------------------------------------------
+// DM join + launch
+// ---------------------------------------------------------------------------
+
+async function handleDmJoinLaunch(campaign, urlInput) {
+  const urlVal = urlInput.value.trim();
+  const parsed = parseInviteUrl(urlVal);
+  if (!parsed) {
+    showStatus("Please enter a valid invite URL (https://server/join/CODE).", "error");
+    return;
+  }
+
+  const state = await getState();
+  const email = resolveEmail(state);
+
+  if (!state.ddbUser?.id) {
+    showStatus("No D&D Beyond user detected.", "error");
+    return;
+  }
+
+  const btn = byId(`dm-launch-btn-${campaign.id}`);
+  if (btn) btn.disabled = true;
+  showStatus("Checking server & invite…", "info");
+
+  const emailInput = byId("user-email");
+  if (emailInput?.value.trim()) await saveState({ savedEmail: emailInput.value.trim() });
+
+  await ensureServer(parsed.serverUrl);
+
+  const pre = await browser.runtime.sendMessage({
+    type: "run-preflight",
+    payload: { inviteCode: parsed.inviteCode, email, externalUserId: String(state.ddbUser.id) }
+  });
+
+  if (!pre?.ok) {
+    showStatus(pre?.error || "Server check failed.", "error");
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  const campaignName = pre.invite?.campaign?.name || campaign.name || null;
+  await saveDmConnection({
+    ddbCampaignId: campaign.id,
+    serverUrl: parsed.serverUrl,
+    inviteCode: parsed.inviteCode,
+    inviteUrl: urlVal,
+    campaignName
+  });
+
+  const freshState = await getState();
+  await doGuestLaunchAsDm(campaign, freshState, email, parsed.inviteCode, campaignName || "");
+  if (btn) btn.disabled = false;
+}
+
+async function doGuestLaunchAsDm(campaign, state, email, inviteCode, campaignName) {
+  const result = await browser.runtime.sendMessage({
+    type: "guest-login-and-launch",
+    payload: {
+      inviteCode,
+      email,
+      externalUserId: String(state.ddbUser?.id || ""),
+      displayName: state.ddbUser?.displayName || "",
+      avatarUrl: state.ddbUser?.avatarUrl || null,
+      isDm: true,
+      externalCampaignId: String(campaign.id),
+      campaignName: campaign.name || campaignName || ""
+    }
+  });
+
+  if (!result?.ok) {
+    showStatus(result?.error || "DM login failed.", "error");
+    document.querySelector(`.char-card[data-dm-campaign-id="${campaign.id}"]`)?.classList.remove("launching");
+    return;
+  }
+
+  showStatus(`Connected to "${campaignName || campaign.name || "campaign"}" as DM! VTT-Chat is opening…`, "ok");
+  setTimeout(() => window.close(), 800);
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +1052,7 @@ function setupRelaunch(lastSession, servers) {
 async function rerender() {
   const state = await getState();
   renderCharacters(state.ddbCharacterList, state.campaignConnections);
+  renderDmCampaigns(state.ddbOwnedCampaigns, state.dmConnections);
   renderConnections(state.campaignConnections, state.ddbCharacterList);
 }
 
@@ -774,11 +1062,12 @@ async function rerender() {
 
 async function initPopup() {
   const state = await getState();
-  const { servers, lastSession, ddbUser, ddbCharacterList, savedEmail, campaignConnections } = state;
+  const { servers, lastSession, ddbUser, ddbCharacterList, savedEmail, campaignConnections, ddbOwnedCampaigns, dmConnections } = state;
 
   renderUser(ddbUser, savedEmail);
   setupUserBarToggle(ddbUser);
   renderCharacters(ddbCharacterList, campaignConnections);
+  renderDmCampaigns(ddbOwnedCampaigns, dmConnections);
   renderConnections(campaignConnections, ddbCharacterList);
   setupRelaunch(lastSession, servers);
 
