@@ -142,7 +142,7 @@ async function emitCharacterDiffs(previousList, nextList) {
       const payload = buildFullCharacterPayload(nextChar, detailData);
       browser.runtime.sendMessage({ type: "character-data-updated", payload });
     } catch {
-      // skip — webRequest sync will catch the next DDB write
+      // skip — user can trigger a manual sync from the character sheet
     }
   }
 }
@@ -347,9 +347,43 @@ function extractFeatures(data) {
   return features;
 }
 
+function buildItemProperties(def) {
+  // Melee weapons report reach as range 5 (normal) or 10 (polearm). Anything
+  // larger is an actual thrown/ranged weapon and should show the range values.
+  const rangeStr = def.range > 10
+    ? (def.longRange && def.longRange > def.range
+        ? `(${def.range}/${def.longRange})`
+        : `(${def.range})`)
+    : null;
+
+  const names = (def.properties || []).map(p => {
+    const name = p.name;
+    // Annotate the property that carries the range meaning rather than appending separately
+    if (rangeStr && (name === "Thrown" || name === "Range")) return `${name} ${rangeStr}`;
+    return name;
+  }).filter(Boolean);
+
+  return names.length ? names.join(", ") : null;
+}
+
+function buildItemDamage(def) {
+  if (def.filterType !== "Weapon" || !def.damage) return null;
+  const d = def.damage;
+  let str = d.diceString || (d.diceCount && d.diceValue ? `${d.diceCount}d${d.diceValue}` : null);
+  if (!str) return null;
+  if (d.fixedValue) str += `+${d.fixedValue}`;
+  return str;
+}
+
 function extractInventory(data) {
   const items = (data.inventory || []).map(item => {
     const def = item.definition || {};
+    const isWeapon = def.filterType === "Weapon";
+    const tags = Array.isArray(def.tags) ? def.tags : [];
+    const isContainer = def.isContainer === true || tags.includes("Container");
+    const properties = buildItemProperties(def);
+    const damage = buildItemDamage(def);
+
     return {
       id: item.id,
       name: def.name || null,
@@ -361,9 +395,19 @@ function extractInventory(data) {
       isAttuned: item.isAttuned || false,
       chargesUsed: item.chargesUsed || 0,
       weight: def.weight || 0,
-      cost: def.cost ?? null
+      cost: def.cost ?? null,
+      isContainer,
+      containerEntityId: item.containerEntityId || null,
+      magic: def.magic === true,
+      description: def.snippetDescription || def.description || null,
+      tags,
+      avatarUrl: def.avatarUrl || null,
+      ...(properties !== null && { properties }),
+      ...(isWeapon && damage !== null && { damage }),
+      ...(isWeapon && def.damageType && { damageType: def.damageType })
     };
   });
+
   const customItems = (data.customItems || []).map(item => ({
     id: item.id,
     name: item.name || null,
@@ -373,8 +417,14 @@ function extractInventory(data) {
     isAttuned: false,
     weight: item.weight || 0,
     cost: item.cost ?? null,
-    notes: item.notes || null
+    notes: item.notes || null,
+    isContainer: false,
+    containerEntityId: null,
+    description: item.description || null,
+    tags: [],
+    avatarUrl: null
   }));
+
   return {
     items: [...items, ...customItems],
     currency: data.currencies || { cp: 0, sp: 0, gp: 0, ep: 0, pp: 0 }
@@ -434,11 +484,76 @@ async function fetchUserCampaigns() {
 
 function normalizeOwnedCampaigns(raw) {
   if (!Array.isArray(raw)) return [];
-  return raw.map(c => ({
-    id: c.id,
-    name: c.name || null,
-    memberCount: c.memberCount ?? null
+  return raw.map(c => {
+    // DDB wraps each list item in {"data": {...}} — unwrap if present
+    const item = (c?.data && typeof c.data === "object" && !Array.isArray(c.data)) ? c.data : c;
+    return {
+      id: item.id,
+      name: item.name || null,
+      memberCount: item.memberCount ?? null,
+      dmId: item.dmId ?? item.dmUserId ?? null
+    };
+  });
+}
+
+// Builds the rich DM sync payload: campaign metadata + full stats for every party member.
+// Character detail fetches are best-effort — some may be inaccessible to the DM token.
+async function buildDmCampaignPayload(ddbCampaignId) {
+  const details = await fetchCampaignDetails(Number(ddbCampaignId));
+  if (!details) return null;
+
+  const members = Array.isArray(details.activeCharacters) ? details.activeCharacters : [];
+
+  const characters = await Promise.all(members.map(async member => {
+    const charId = member.id;
+
+    let detailData = null;
+    try {
+      detailData = await fetchCharacterDetails(charId);
+    } catch {
+      // Player character may not be accessible via DM token — basic data only
+    }
+
+    if (detailData) {
+      const listChar = {
+        id: charId,
+        name: member.name || null,
+        race: null,
+        class: member.class || null,
+        level: member.level || null,
+        avatar: member.avatarUrl || null
+      };
+      const full = buildFullCharacterPayload(listChar, detailData);
+      return {
+        ...full,
+        externalUserId: String(member.userId || ""),
+        displayName: member.userName || member.displayName || null
+      };
+    }
+
+    return {
+      externalCharacterId: String(charId),
+      externalUserId: String(member.userId || ""),
+      displayName: member.userName || member.displayName || null,
+      name: member.name || null,
+      class: member.class || null,
+      level: member.level ?? null,
+      avatarUrl: member.avatarUrl || null,
+      characterUrl: `https://www.dndbeyond.com/characters/${charId}`
+    };
   }));
+
+  return {
+    externalCampaignId: String(details.id || ddbCampaignId),
+    campaignData: {
+      name: details.name || null,
+      description: details.description || null,
+      publicNotes: details.publicNotes || null,
+      dmExternalUserId: String(details.dmId || ""),
+      memberCount: members.length
+    },
+    characters
+  };
 }
 
 async function fetchCampaignDetails(campaignId) {
@@ -468,6 +583,9 @@ function getCampaignIdFromUrl() {
   const m = location.pathname.match(/\/campaigns\/(\d+)/);
   return m ? Number(m[1]) : null;
 }
+function isBuilderPage() {
+  return location.pathname.includes("/builder/");
+}
 async function isOwnedCharacterPage() {
   if (!isCharacterPage()) return false;
   const charId = getCharacterIdFromUrl();
@@ -476,7 +594,7 @@ async function isOwnedCharacterPage() {
 }
 
 //
-// 6. CHARACTER INFO BUTTON (debug helper — copies extracted JSON to clipboard)
+// 6. CHARACTER INFO BUTTON (copies extracted JSON to clipboard)
 //
 async function copyCharacterInfoToClipboard(charId, btn) {
   const { ddbCharacterList } = await browser.storage.local.get("ddbCharacterList");
@@ -500,57 +618,108 @@ async function copyCharacterInfoToClipboard(charId, btn) {
   }
 }
 
-function injectCharacterInfoButtons(characterList) {
-  if (!characterList?.length) return;
-  const knownIds = new Set(characterList.map(c => c.id));
+async function injectCharacterPageButtons() {
+  if (isBuilderPage() || !isCharacterPage()) return;
 
-  document.querySelectorAll('a[href*="/characters/"]').forEach(link => {
-    const m = link.href.match(/\/characters\/(\d+)/);
-    if (!m) return;
-    const charId = Number(m[1]);
-    if (!knownIds.has(charId)) return;
+  const charId = getCharacterIdFromUrl();
+  const infoId = `vtt-info-btn-${charId}`;
+  const syncId = `vtt-sync-btn-${charId}`;
+  if (document.getElementById(infoId) && document.getElementById(syncId)) return;
 
-    const buttonId = `vtt-info-btn-${charId}`;
-    if (document.getElementById(buttonId)) return;
+  const { ddbCharacterList } = await browser.storage.local.get("ddbCharacterList");
+  if (!ddbCharacterList?.some(c => c.id === charId)) return;
 
-    const card =
-      link.closest('[class*="listing-item"]') ||
-      link.closest('[class*="character-card"]') ||
-      link.closest('[class*="ddb-character"]') ||
-      link.closest("li") ||
-      link.closest("article") ||
-      link.parentElement;
-    if (!card) return;
+  const heading = document.querySelector(".ddbc-character-tidbits__heading");
+  const menuCallout = heading?.querySelector(".ddbc-character-tidbits__menu-callout");
+  if (!menuCallout) return;
 
-    console.assert(card);
+  // Inject spin keyframe once per page
+  if (!document.getElementById("vtt-chat-styles")) {
+    const style = document.createElement("style");
+    style.id = "vtt-chat-styles";
+    style.textContent = "@keyframes vtt-spin { to { transform: rotate(360deg); } }";
+    document.head.appendChild(style);
+  }
 
-    const btn = document.createElement("button");
-    btn.id = buttonId;
-    btn.textContent = "INFO";
-    btn.title = "Copy character JSON to clipboard (VTT-Chat)";
-    btn.style.cssText =
-      "position:absolute;top:-45px;right:1px;padding:2px 8px;font-size:11px;" +
-      "font-weight:600;background:#1a3a6b;color:#fff;border:none;" +
-      "border-radius:3px;cursor:pointer;z-index:9999;opacity:0.85;";
-    btn.addEventListener("mouseenter", () => { btn.style.opacity = "1"; });
-    btn.addEventListener("mouseleave", () => { btn.style.opacity = "0.85"; });
-    btn.addEventListener("click", e => {
+  const BTN_CLASS =
+    "ct-theme-button ct-theme-button--outline ct-theme-button--interactive " +
+    "ct-button character-button ddbc-button character-button-small";
+  const BTN_BG = "rgba(26, 58, 107, 0.5)";
+
+  // SYNC button — refresh SVG, spins while fetching, inserted first (closest to MANAGE)
+  if (!document.getElementById(syncId)) {
+    const syncBtn = document.createElement("button");
+    syncBtn.id = syncId;
+    syncBtn.title = "Sync Character to VTT-Chat";
+    syncBtn.className = BTN_CLASS;
+    syncBtn.style.backgroundColor = BTN_BG;
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("fill", "currentColor");
+    svg.style.display = "block";
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d",
+      "M17.65 6.35A7.96 7.96 0 0012 4C7.58 4 4.01 7.58 4.01 12S7.58 20 12 20" +
+      "c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6" +
+      "s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+    );
+    svg.appendChild(path);
+    syncBtn.appendChild(svg);
+
+    syncBtn.addEventListener("click", async e => {
       e.preventDefault();
       e.stopPropagation();
-      copyCharacterInfoToClipboard(charId, btn);
+      syncBtn.disabled = true;
+      svg.style.animation = "vtt-spin 0.8s linear infinite";
+      try {
+        await handleRefetchCharacter(charId);
+      } finally {
+        svg.style.animation = "";
+        syncBtn.disabled = false;
+      }
     });
 
-    if (getComputedStyle(card).position === "static") card.style.position = "relative";
-    card.appendChild(btn);
-  });
+    menuCallout.insertAdjacentElement("afterend", syncBtn);
+  }
+
+  // INFO button — copies full character JSON to clipboard
+  if (!document.getElementById(infoId)) {
+    const infoBtn = document.createElement("button");
+    infoBtn.id = infoId;
+    infoBtn.textContent = "INFO";
+    infoBtn.title = "Copy Character Data to Clipboard";
+    infoBtn.className = BTN_CLASS;
+    infoBtn.style.backgroundColor = BTN_BG;
+
+    infoBtn.addEventListener("click", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      void copyCharacterInfoToClipboard(charId, infoBtn);
+    });
+
+    // INFO goes after SYNC (or directly after menuCallout if SYNC wasn't injected)
+    const syncEl = document.getElementById(syncId);
+    (syncEl ?? menuCallout).insertAdjacentElement("afterend", infoBtn);
+  }
 }
 
 //
 // 7. XHR-TRIGGERED REFETCH
 //
-browser.runtime.onMessage.addListener((msg) => {
+browser.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "refetch-character") {
     void handleRefetchCharacter(msg.characterId);
+    return;
+  }
+  if (msg.type === "dm-fetch-campaign-data") {
+    // Return true to keep the channel open; respond via sendResponse once async work finishes
+    buildDmCampaignPayload(msg.ddbCampaignId)
+      .then(payload => sendResponse(payload))
+      .catch(() => sendResponse(null));
+    return true;
   }
 });
 
@@ -629,13 +798,7 @@ async function ensureDdbCache() {
   let injectTimer = null;
   const observer = new MutationObserver(() => {
     clearTimeout(injectTimer);
-    injectTimer = setTimeout(async () => {
-      const { ddbUser, ddbCharacterList } = await browser.storage.local.get([
-        "ddbUser",
-        "ddbCharacterList"
-      ]);
-      if (ddbUser) injectCharacterInfoButtons(ddbCharacterList);
-    }, 300);
+    injectTimer = setTimeout(() => { void injectCharacterPageButtons(); }, 300);
   });
 
   observer.observe(document.body, { childList: true, subtree: true });

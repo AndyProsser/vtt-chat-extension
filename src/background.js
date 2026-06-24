@@ -7,7 +7,6 @@ const TOKEN_RENEWAL_WINDOW_MS = 15 * 60 * 1000;
 const EXTERNAL_SYSTEM = "dndbeyond";
 
 let guestSession = null;
-const pendingCharacterSyncs = new Map();
 
 browser.runtime.onMessage.addListener((msg) => {
   if (msg.type === "connect") {
@@ -50,6 +49,10 @@ browser.runtime.onMessage.addListener((msg) => {
 
   if (msg.type === "relaunch-session") {
     return handleRelaunchSession();
+  }
+
+  if (msg.type === "dm-campaign-sync") {
+    return runDmCampaignSync(msg.payload || {});
   }
 });
 
@@ -332,6 +335,65 @@ async function syncCharacterAndCampaign(server, token, campaignId, payload) {
       campaignUpdate
     })
   });
+}
+
+// ---------------------------------------------------------------------------
+// DM campaign sync
+// ---------------------------------------------------------------------------
+
+async function syncDmCampaignData(server, token, campaignId, dmPayload) {
+  if (!token || !campaignId || !dmPayload) return;
+  await apiJson(server, "/api/integrations/external/dm-sync", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      campaignId,
+      externalSystem: EXTERNAL_SYSTEM,
+      externalCampaignId: dmPayload.externalCampaignId,
+      campaignData: dmPayload.campaignData,
+      characters: dmPayload.characters
+    })
+  });
+}
+
+async function runDmCampaignSync({ ddbCampaignId, campaignId }) {
+  if (!ddbCampaignId) return { ok: false, error: "No DDB campaign ID provided" };
+
+  const server = await getActiveServer();
+  if (!server) return { ok: false, error: "No active server configured" };
+
+  const token = guestSession?.token;
+  const resolvedCampaignId = campaignId || guestSession?.campaignId;
+  if (!token || !resolvedCampaignId) return { ok: false, error: "No active DM session" };
+
+  // Ask a live DnD Beyond tab to fetch the campaign + party data (needs DDB cookies)
+  let dmPayload = null;
+  try {
+    const tabs = await browser.tabs.query({ url: "*://*.dndbeyond.com/*" });
+    for (const tab of tabs) {
+      try {
+        dmPayload = await browser.tabs.sendMessage(tab.id, {
+          type: "dm-fetch-campaign-data",
+          ddbCampaignId
+        });
+        if (dmPayload) break;
+      } catch {
+        // Tab has no content script or timed out — try next
+      }
+    }
+  } catch {
+    return { ok: false, error: "Could not query browser tabs" };
+  }
+
+  if (!dmPayload) {
+    return { ok: false, error: "No D&D Beyond tab found — open dndbeyond.com and try again" };
+  }
+
+  await syncDmCampaignData(server, token, resolvedCampaignId, dmPayload);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -674,9 +736,14 @@ async function runGuestLoginAndLaunch(payload) {
     await syncCharacterAndCampaign(server, loginResult.token, campaignId, payload);
   }
 
-  void triggerInitialCharacterSync(
-    guestSession?.character?.externalCharacterId || payload.externalCharacterId
-  );
+  if (payload.isDm && payload.externalCampaignId && campaignId) {
+    // Fire-and-forget rich DM sync — party data fetched from DnD Beyond in the background
+    void runDmCampaignSync({ ddbCampaignId: String(payload.externalCampaignId), campaignId });
+  } else {
+    void triggerInitialCharacterSync(
+      guestSession?.character?.externalCharacterId || payload.externalCharacterId
+    );
+  }
 
   const session = campaignId ? await ensureSession(server, loginResult.token, campaignId) : null;
   await launchTab(server, campaignId, loginResult.token, session?.sessionId || null);
@@ -740,7 +807,7 @@ async function triggerInitialCharacterSync(characterId) {
 }
 
 // ---------------------------------------------------------------------------
-// XHR-triggered character sync (webRequest observer)
+// Manual character sync (triggered by the sync button in the content script)
 // ---------------------------------------------------------------------------
 
 async function handleCharacterDataUpdated(payload) {
@@ -754,55 +821,6 @@ async function handleCharacterDataUpdated(payload) {
     character: payload
   });
 }
-
-async function dispatchCharacterRefetch(tabId, characterId) {
-  // Must have an active VTT-Chat session
-  if (!guestSession?.token || !guestSession?.campaignId) return;
-
-  // Must be the character that connected to VTT-Chat
-  const sessionCharId =
-    guestSession.character?.externalCharacterId ||
-    guestSession.character?.ddbCharacterId;
-  if (sessionCharId && String(sessionCharId) !== String(characterId)) return;
-
-  // Tab must be the DDB character sheet for this character
-  let tab;
-  try { tab = await browser.tabs.get(tabId); } catch { return; }
-  const tabCharMatch = (tab.url || "").match(/dndbeyond\.com\/characters\/(\d+)/);
-  if (!tabCharMatch || Number(tabCharMatch[1]) !== characterId) return;
-
-  // Backend must have players connected (don't hit DDB if nobody is in the session)
-  const server = await getActiveServer();
-  if (!server) return;
-  const status = await checkSessionStatus({
-    serverUrl: server.url,
-    campaignId: guestSession.campaignId
-  });
-  if (!status.ok || !status.active) return;
-
-  browser.tabs.sendMessage(tabId, { type: "refetch-character", characterId }).catch(() => {});
-}
-
-browser.webRequest.onCompleted.addListener(
-  (details) => {
-    if (details.method === "GET") return;
-    const m = details.url.match(/\/character\/v5\/character\/(\d+)/);
-    if (!m || !details.tabId || details.tabId < 0) return;
-
-    const characterId = Number(m[1]);
-    const key = `${details.tabId}:${characterId}`;
-
-    clearTimeout(pendingCharacterSyncs.get(key));
-    pendingCharacterSyncs.set(
-      key,
-      setTimeout(() => {
-        pendingCharacterSyncs.delete(key);
-        void dispatchCharacterRefetch(details.tabId, characterId);
-      }, 2000)
-    );
-  },
-  { urls: ["https://character-service.dndbeyond.com/*"] }
-);
 
 // ---------------------------------------------------------------------------
 // Session status check (popup polling)

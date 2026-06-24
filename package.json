@@ -1,6 +1,6 @@
 {
   "name": "vtt-chat-extension",
-  "version": "0.3.5",
+  "version": "0.3.11",
   "description": "Browser extension to launch VTT-Chat sessions from D&D Beyond",
   "type": "module",
   "main": "build.js",
