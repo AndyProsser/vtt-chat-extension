@@ -321,9 +321,11 @@ function buildDmCard(campaign, conn) {
 
   const det = document.createElement("div");
   det.className = "char-detail";
-  det.textContent = campaign.memberCount != null
+  const memberStr = campaign.memberCount != null
     ? `${campaign.memberCount} member${campaign.memberCount !== 1 ? "s" : ""}`
     : "Dungeon Master";
+  const dmStr = campaign.dmUsername ? ` · DM: ${campaign.dmUsername}` : "";
+  det.textContent = memberStr + dmStr;
   info.appendChild(det);
 
   if (conn) {

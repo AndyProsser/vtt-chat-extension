@@ -490,8 +490,10 @@ function normalizeOwnedCampaigns(raw) {
     return {
       id: item.id,
       name: item.name || null,
-      memberCount: item.memberCount ?? null,
-      dmId: item.dmId ?? item.dmUserId ?? null
+      memberCount: item.playerCount || null,
+      dateCreated: item.dateCreated || null,
+      dmUsername: item.dmUsername || null,
+      dmId: item.dmId || null
     };
   });
 }
@@ -550,6 +552,8 @@ async function buildDmCampaignPayload(ddbCampaignId) {
       description: details.description || null,
       publicNotes: details.publicNotes || null,
       dmExternalUserId: String(details.dmId || ""),
+      dmUsername: details.dmUsername || null,
+      dateCreated: details.dateCreated || null,
       memberCount: members.length
     },
     characters
@@ -731,17 +735,18 @@ browser.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 async function handleRefetchCharacter(characterId) {
+  console.log("[VTT-SYNC] handleRefetchCharacter", characterId);
   const { ddbCharacterList } = await browser.storage.local.get("ddbCharacterList");
   const listChar = ddbCharacterList?.find(c => c.id === characterId);
-  if (!listChar) return;
+  if (!listChar) { console.warn("[VTT-SYNC] character not in cache, aborting"); return; }
 
-  try {
-    const detailData = await fetchCharacterDetails(characterId);
-    const payload = buildFullCharacterPayload(listChar, detailData);
-    browser.runtime.sendMessage({ type: "character-data-updated", payload });
-  } catch {
-    // fetchCharacterDetails or sendMessage can fail transiently — skip this cycle
-  }
+  const detailData = await fetchCharacterDetails(characterId);
+  console.log("[VTT-SYNC] fetchCharacterDetails returned", detailData ? "ok" : "null");
+
+  const payload = buildFullCharacterPayload(listChar, detailData);
+  console.log("[VTT-SYNC] sending character-data-updated", payload?.externalCharacterId);
+  await browser.runtime.sendMessage({ type: "character-data-updated", payload });
+  console.log("[VTT-SYNC] sendMessage complete");
 }
 
 //

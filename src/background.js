@@ -200,37 +200,51 @@ async function ensureGuestSession() {
   const server = state.servers.find(s => s.id === lastSession.serverId);
   if (!server) return null;
 
-  // In-memory token may still be valid even if near-expiry check above tripped
+  // In-memory token still present but near-expiry — return it anyway for now
   if (guestSession?.token) return guestSession;
 
-  // Exchange stored device credential for a fresh token
+  // Prefer a fresh token via device credential exchange
   const credential = await getDeviceCredential(server.id);
-  if (!credential) return null;
+  if (credential) {
+    const deviceId = await getDeviceId();
+    const exchanged = await apiJson(server, "/api/auth/extension/credential/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential, deviceId })
+    });
 
-  const deviceId = await getDeviceId();
-  const exchanged = await apiJson(server, "/api/auth/extension/credential/exchange", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ credential, deviceId })
-  });
-
-  if (!exchanged.response.ok || !exchanged.json.token) return null;
-
-  if (exchanged.json.credential) {
-    await setDeviceCredential(server.id, exchanged.json.credential);
+    if (exchanged.response.ok && exchanged.json.token) {
+      if (exchanged.json.credential) {
+        await setDeviceCredential(server.id, exchanged.json.credential);
+      }
+      guestSession = {
+        token: exchanged.json.token,
+        expiresAt: tokenExpiryMs(exchanged.json.token),
+        campaignId: exchanged.json.user?.campaignId || lastSession.campaignId,
+        inviteCode: lastSession.inviteCode,
+        renewalPayload: null,
+        user: exchanged.json.user || null,
+        character: null,
+        authType: lastSession.authType || "GUEST"
+      };
+      return guestSession;
+    }
   }
 
+  // No device credential (or exchange failed) — restore from the last known token.
+  // If it has since expired the backend will reject the sync; the user can then
+  // reconnect from the popup to get a fresh one.
+  if (!lastSession.token) return null;
   guestSession = {
-    token: exchanged.json.token,
-    expiresAt: tokenExpiryMs(exchanged.json.token),
-    campaignId: exchanged.json.user?.campaignId || lastSession.campaignId,
-    inviteCode: lastSession.inviteCode,
+    token: lastSession.token,
+    expiresAt: null,
+    campaignId: lastSession.campaignId,
+    inviteCode: lastSession.inviteCode || null,
     renewalPayload: null,
-    user: exchanged.json.user || null,
+    user: null,
     character: null,
     authType: lastSession.authType || "GUEST"
   };
-
   return guestSession;
 }
 
@@ -314,13 +328,15 @@ async function uploadAvatarIfNeeded(server, token, ddbAvatarUrl, externalCharact
 // ---------------------------------------------------------------------------
 
 async function syncCharacterAndCampaign(server, token, campaignId, payload) {
-  if (!token || !campaignId) return;
+  console.log("[VTT-SYNC] syncCharacterAndCampaign entered, campaignId=", campaignId, "hasToken=", !!token);
+  if (!token || !campaignId) { console.warn("[VTT-SYNC] missing token or campaignId"); return; }
 
   const character = payload?.character || null;
   const campaignPacket = payload?.campaignPacket || null;
   const isDm = Boolean(payload?.isDm);
 
-  if (!character && !campaignPacket) return;
+  console.log("[VTT-SYNC] character=", !!character, "campaignPacket=", !!campaignPacket);
+  if (!character && !campaignPacket) { console.warn("[VTT-SYNC] no character or campaignPacket, aborting"); return; }
 
   let avatarUrl = character?.avatarUrl || null;
   if (avatarUrl && character?.externalCharacterId) {
@@ -857,18 +873,25 @@ async function triggerInitialCharacterSync(characterId) {
 // ---------------------------------------------------------------------------
 
 async function handleCharacterDataUpdated(payload) {
+  console.log("[VTT-SYNC] handleCharacterDataUpdated received", payload?.externalCharacterId);
+
   const session = await ensureGuestSession();
+  console.log("[VTT-SYNC] ensureGuestSession →", session ? `ok (campaignId=${session.campaignId})` : "null — no session");
   if (!session) return;
 
   const server = await getActiveServer();
+  console.log("[VTT-SYNC] getActiveServer →", server ? server.url : "null — no active server");
   if (!server) return;
 
   const token = await ensureRenewedGuestToken(server);
-  if (!token || !session.campaignId) return;
+  console.log("[VTT-SYNC] ensureRenewedGuestToken →", token ? "ok" : "null — token unavailable");
+  if (!token || !session.campaignId) { console.warn("[VTT-SYNC] missing token or campaignId, aborting"); return; }
 
+  console.log("[VTT-SYNC] calling syncCharacterAndCampaign, campaignId=", session.campaignId);
   await syncCharacterAndCampaign(server, token, session.campaignId, {
     character: payload
   });
+  console.log("[VTT-SYNC] syncCharacterAndCampaign complete");
 }
 
 // ---------------------------------------------------------------------------
