@@ -912,7 +912,7 @@ async function handleDmSync(campaign, conn, btn) {
   if (result?.ok) {
     showStatus("Campaign data synced to VTT-Chat!", "ok");
   } else {
-    showStatus(result?.error || "Sync failed — is a D&D Beyond tab open?", "error");
+    showStatus(result?.error || "Sync failed — ensure you are signed in to D&D Beyond.", "error");
   }
 }
 

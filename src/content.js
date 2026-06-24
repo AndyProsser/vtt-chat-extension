@@ -669,11 +669,9 @@ async function injectCharacterPageButtons() {
     infoBtn.className = BTN_CLASS;
     infoBtn.style.backgroundColor = BTN_BG;
 
-    infoBtn.addEventListener("click", e => { e.stopImmediatePropagation(); }, true);
     infoBtn.addEventListener("click", e => {
       e.preventDefault();
       e.stopPropagation();
-      e.stopImmediatePropagation();
       void copyCharacterInfoToClipboard(charId, infoBtn);
     });
 
@@ -706,11 +704,9 @@ async function injectCharacterPageButtons() {
     svg.appendChild(path);
     syncBtn.appendChild(svg);
 
-    syncBtn.addEventListener("click", e => { e.stopImmediatePropagation(); }, true);
     syncBtn.addEventListener("click", async e => {
       e.preventDefault();
       e.stopPropagation();
-      e.stopImmediatePropagation();
       syncBtn.disabled = true;
       svg.style.animation = "vtt-spin 0.8s linear infinite";
       try {
@@ -745,18 +741,13 @@ browser.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 async function handleRefetchCharacter(characterId) {
-  console.log("[VTT-SYNC] handleRefetchCharacter", characterId);
   const { ddbCharacterList } = await browser.storage.local.get("ddbCharacterList");
   const listChar = ddbCharacterList?.find(c => c.id === characterId);
-  if (!listChar) { console.warn("[VTT-SYNC] character not in cache, aborting"); return; }
+  if (!listChar) return;
 
   const detailData = await fetchCharacterDetails(characterId);
-  console.log("[VTT-SYNC] fetchCharacterDetails returned", detailData ? "ok" : "null");
-
   const payload = buildFullCharacterPayload(listChar, detailData);
-  console.log("[VTT-SYNC] sending character-data-updated", payload?.externalCharacterId);
   await browser.runtime.sendMessage({ type: "character-data-updated", payload });
-  console.log("[VTT-SYNC] sendMessage complete");
 }
 
 //

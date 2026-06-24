@@ -328,15 +328,13 @@ async function uploadAvatarIfNeeded(server, token, ddbAvatarUrl, externalCharact
 // ---------------------------------------------------------------------------
 
 async function syncCharacterAndCampaign(server, token, campaignId, payload) {
-  console.log("[VTT-SYNC] syncCharacterAndCampaign entered, campaignId=", campaignId, "hasToken=", !!token);
-  if (!token || !campaignId) { console.warn("[VTT-SYNC] missing token or campaignId"); return; }
+  if (!token || !campaignId) return;
 
   const character = payload?.character || null;
   const campaignPacket = payload?.campaignPacket || null;
   const isDm = Boolean(payload?.isDm);
 
-  console.log("[VTT-SYNC] character=", !!character, "campaignPacket=", !!campaignPacket);
-  if (!character && !campaignPacket) { console.warn("[VTT-SYNC] no character or campaignPacket, aborting"); return; }
+  if (!character && !campaignPacket) return;
 
   let avatarUrl = character?.avatarUrl || null;
   if (avatarUrl && character?.externalCharacterId) {
@@ -421,17 +419,118 @@ async function syncDmCampaignData(server, token, campaignId, dmPayload) {
   });
 }
 
+// Reads the DDB session cookies from the browser store and exchanges them for
+// a Cobalt auth token — works without a DDB tab being open.
+async function fetchCobaltTokenFromBackground() {
+  try {
+    const cookies = await browser.cookies.getAll({ url: "https://www.dndbeyond.com" });
+    if (!cookies.length) return null;
+    const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join("; ");
+    const res = await fetch("https://auth-service.dndbeyond.com/v1/cobalt-token", {
+      method: "POST",
+      headers: { Cookie: cookieHeader }
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.token || null;
+  } catch {
+    return null;
+  }
+}
+
+// Background-native DM campaign payload builder — no content script / DDB tab needed.
+// Fetches campaign details and basic member data using DDB cookies directly.
+// Full character stat extraction (which requires content.js helpers) is skipped;
+// each character entry contains the data available from the campaign & character APIs.
+async function buildDmCampaignPayloadDirect(ddbCampaignId) {
+  const cobaltToken = await fetchCobaltTokenFromBackground();
+  if (!cobaltToken) return null;
+
+  const authHeaders = { Authorization: `Bearer ${cobaltToken}`, Accept: "application/json" };
+
+  let details;
+  try {
+    const res = await fetch(
+      `https://api.dndbeyond.com/campaigns/v1/details/${ddbCampaignId}`,
+      { headers: authHeaders }
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    details = json.data;
+  } catch {
+    return null;
+  }
+  if (!details) return null;
+
+  const members = Array.isArray(details.activeCharacters) ? details.activeCharacters : [];
+
+  const characters = await Promise.all(members.map(async member => {
+    const charId = member.id;
+    try {
+      const res = await fetch(
+        `https://character-service.dndbeyond.com/character/v5/character/${charId}?includeCustomItems=true`,
+        { headers: authHeaders }
+      );
+      if (res.ok) {
+        const json = await res.json();
+        const d = json.data;
+        if (d) {
+          const totalLevel = (d.classes || []).reduce((s, c) => s + (c.level || 0), 0);
+          return {
+            externalCharacterId: String(charId),
+            externalUserId: String(member.userId || ""),
+            displayName: member.userName || member.displayName || null,
+            name: d.name || member.name || null,
+            level: totalLevel || member.level || null,
+            avatarUrl: d.avatarUrl || member.avatarUrl || null,
+            characterUrl: `https://www.dndbeyond.com/characters/${charId}`
+          };
+        }
+      }
+    } catch {}
+    return {
+      externalCharacterId: String(charId),
+      externalUserId: String(member.userId || ""),
+      displayName: member.userName || member.displayName || null,
+      name: member.name || null,
+      level: member.level ?? null,
+      avatarUrl: member.avatarUrl || null,
+      characterUrl: `https://www.dndbeyond.com/characters/${charId}`
+    };
+  }));
+
+  return {
+    externalCampaignId: String(details.id || ddbCampaignId),
+    campaignData: {
+      name: details.name || null,
+      description: details.description || null,
+      publicNotes: details.publicNotes || null,
+      dmExternalUserId: String(details.dmId || ""),
+      dmUsername: details.dmUsername || null,
+      dateCreated: details.dateCreated || null,
+      memberCount: members.length
+    },
+    characters
+  };
+}
+
 async function runDmCampaignSync({ ddbCampaignId, campaignId }) {
   if (!ddbCampaignId) return { ok: false, error: "No DDB campaign ID provided" };
 
   const server = await getActiveServer();
   if (!server) return { ok: false, error: "No active server configured" };
 
-  const token = guestSession?.token;
-  const resolvedCampaignId = campaignId || guestSession?.campaignId;
-  if (!token || !resolvedCampaignId) return { ok: false, error: "No active DM session" };
+  // Use ensureGuestSession so this survives MV3 service worker restarts
+  const session = await ensureGuestSession();
+  if (!session) return { ok: false, error: "No active DM session — please reconnect" };
 
-  // Ask a live DnD Beyond tab to fetch the campaign + party data (needs DDB cookies)
+  const token = await ensureRenewedGuestToken(server);
+  if (!token) return { ok: false, error: "Session token unavailable — please reconnect" };
+
+  const resolvedCampaignId = campaignId || session.campaignId;
+  if (!resolvedCampaignId) return { ok: false, error: "No campaign ID — please reconnect" };
+
+  // Prefer a live DDB tab: the content script can run full character stat extraction
   let dmPayload = null;
   try {
     const tabs = await browser.tabs.query({ url: "*://*.dndbeyond.com/*" });
@@ -442,16 +541,17 @@ async function runDmCampaignSync({ ddbCampaignId, campaignId }) {
           ddbCampaignId
         });
         if (dmPayload) break;
-      } catch {
-        // Tab has no content script or timed out — try next
-      }
+      } catch {}
     }
-  } catch {
-    return { ok: false, error: "Could not query browser tabs" };
+  } catch {}
+
+  // No DDB tab available — build payload directly using DDB session cookies
+  if (!dmPayload) {
+    dmPayload = await buildDmCampaignPayloadDirect(ddbCampaignId);
   }
 
   if (!dmPayload) {
-    return { ok: false, error: "No D&D Beyond tab found — open dndbeyond.com and try again" };
+    return { ok: false, error: "Could not fetch campaign data — ensure you are signed in to D&D Beyond" };
   }
 
   await syncDmCampaignData(server, token, resolvedCampaignId, dmPayload);
@@ -873,25 +973,18 @@ async function triggerInitialCharacterSync(characterId) {
 // ---------------------------------------------------------------------------
 
 async function handleCharacterDataUpdated(payload) {
-  console.log("[VTT-SYNC] handleCharacterDataUpdated received", payload?.externalCharacterId);
-
   const session = await ensureGuestSession();
-  console.log("[VTT-SYNC] ensureGuestSession →", session ? `ok (campaignId=${session.campaignId})` : "null — no session");
   if (!session) return;
 
   const server = await getActiveServer();
-  console.log("[VTT-SYNC] getActiveServer →", server ? server.url : "null — no active server");
   if (!server) return;
 
   const token = await ensureRenewedGuestToken(server);
-  console.log("[VTT-SYNC] ensureRenewedGuestToken →", token ? "ok" : "null — token unavailable");
-  if (!token || !session.campaignId) { console.warn("[VTT-SYNC] missing token or campaignId, aborting"); return; }
+  if (!token || !session.campaignId) return;
 
-  console.log("[VTT-SYNC] calling syncCharacterAndCampaign, campaignId=", session.campaignId);
   await syncCharacterAndCampaign(server, token, session.campaignId, {
     character: payload
   });
-  console.log("[VTT-SYNC] syncCharacterAndCampaign complete");
 }
 
 // ---------------------------------------------------------------------------
