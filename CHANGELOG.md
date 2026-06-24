@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `buildArmorProperties(def)` in `content.js` — converts `armorTypeId` + `armorClass` into a human-readable `properties` string on armor inventory items. Light/Medium/Heavy armor renders as e.g. `"Medium Armor (AC14)"`; shields render as `"Shield (+2 AC)"` (using the raw `armorClass` value so magical shields like a +3 shield show the correct bonus). Mutually exclusive with the weapon `properties` field — armor items use this new path, all other items use `buildItemProperties` as before.
+- `fetchCobaltTokenFromBackground()` and `buildDmCampaignPayloadDirect()` in `background.js` — background-native DDB API access using the `cookies` permission. Reads the DDB session cookies from the browser store, exchanges them for a Cobalt auth token, then fetches campaign details and member data directly. No open D&D Beyond tab required.
+- `runDmCampaignSync` now falls back to `buildDmCampaignPayloadDirect` when no DDB tab is available. Try-order: live tab content script first (full character stats) → background cookie path (basic metadata). Error message updated to no longer suggest opening a DDB tab.
+- `runDmCampaignSync` now uses `ensureGuestSession()` instead of accessing `guestSession` directly, fixing the same MV3 service-worker-restart silent failure that was fixed for player syncs in 0.4.0.
+- `docs/EXTENSION-INTEGRATION.md` §5f: full DM Campaign Sync Protocol specification covering the `/api/integrations/external/dm-sync` endpoint, request/response shapes, character resolution strategy (match → stub → lazy promotion), avatar handling, and error responses. §5a endpoint table updated to include the new endpoint.
+
 ---
 
 ## [0.4.0] — 2026-06-24

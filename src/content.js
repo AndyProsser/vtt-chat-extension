@@ -376,6 +376,16 @@ function buildItemProperties(def) {
   return names.length ? names.join(", ") : null;
 }
 
+const ARMOR_TYPE_NAME = { 1: "Light Armor", 2: "Medium Armor", 3: "Heavy Armor" };
+
+function buildArmorProperties(def) {
+  if (def.filterType !== "Armor") return null;
+  const ac = def.armorClass;
+  if (def.armorTypeId === 4) return ac ? `Shield (+${ac} AC)` : "Shield";
+  const typeName = ARMOR_TYPE_NAME[def.armorTypeId] || "Armor";
+  return ac ? `${typeName} (AC ${ac})` : typeName;
+}
+
 function buildItemDamage(def) {
   if (def.filterType !== "Weapon" || !def.damage) return null;
   const d = def.damage;
@@ -389,9 +399,11 @@ function extractInventory(data) {
   const items = (data.inventory || []).map(item => {
     const def = item.definition || {};
     const isWeapon = def.filterType === "Weapon";
+    const isArmor = def.filterType === "Armor";
     const tags = Array.isArray(def.tags) ? def.tags : [];
     const isContainer = def.isContainer === true || tags.includes("Container");
     const properties = buildItemProperties(def);
+    const armorProperties = isArmor ? buildArmorProperties(def) : null;
     const damage = buildItemDamage(def);
 
     return {
@@ -412,7 +424,8 @@ function extractInventory(data) {
       description: def.snippetDescription || def.description || null,
       tags,
       avatarUrl: def.avatarUrl || null,
-      ...(properties !== null && { properties }),
+      ...(isArmor && armorProperties !== null && { properties: armorProperties }),
+      ...(!isArmor && properties !== null && { properties }),
       ...(isWeapon && damage !== null && { damage }),
       ...(isWeapon && def.damageType && { damageType: def.damageType })
     };
