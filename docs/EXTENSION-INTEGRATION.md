@@ -184,22 +184,23 @@ The extension communicates with the backend via the **background script**.
 
 ### 5a. API Endpoints
 
-| Endpoint                                         | Auth required   | Purpose                                                               |
-| ------------------------------------------------ | --------------- | --------------------------------------------------------------------- |
-| `GET /api/platform/status`                       | None            | Pre-flight: platform online + activity stats                          |
-| `GET /api/campaigns/invite/:code/validate`       | None            | Pre-flight: invite validity + campaign name (first-time join only)    |
-| `GET /api/campaigns/:campaignId/session-status`  | None            | Session state for popup display; campaignId acts as the access gate   |
-| `POST /api/auth/extension/preflight`             | None            | Pre-flight: existing account check for email                          |
-| `POST /api/auth/extension/guest-login`           | None            | Guest auth: create or resume guest session (issues device credential) |
-| `POST /api/auth/extension/credential/exchange`   | None            | Returning user: exchange device credential for a fresh JWT            |
-| `POST /api/auth/login`                           | None            | Full account auth (if user has password)                              |
-| `POST /api/auth/upgrade`                         | Guest token     | Upgrade guest → full account                                          |
-| `POST /api/campaigns/:campaignId/session/ensure` | Extension token | Create IDLE session if none exists; returns existing session if any   |
-| `POST /api/integrations/external/avatar-upload`  | Token           | Upload avatar image; returns hosted `avatarUrl`                       |
-| `POST /api/integrations/external/sync`           | Token           | Push character/campaign updates per sync policy                       |
-| `POST /api/integrations/external/dm-sync`        | DM token        | DM-only: push full campaign + party data after connect or on demand   |
-| `POST /api/integrations/logs/ingest`             | Token           | External log ingestion (rolls, attacks, etc.)                         |
-| `POST /api/livekit/token`                        | Token           | LiveKit room token                                                    |
+| Endpoint                                         | Auth required    | Purpose                                                             |
+| ------------------------------------------------ | ---------------- | ------------------------------------------------------------------- |
+| `GET /api/platform/status`                       | None             | Pre-flight: platform online + activity stats                        |
+| `GET /api/campaigns/invite/:code/validate`       | None             | Pre-flight: invite validity + campaign name (first-time join only)  |
+| `GET /api/campaigns/:campaignId/session-status`  | None             | Session state for popup display; campaignId acts as the access gate |
+| `POST /api/auth/extension/preflight`             | None             | Pre-flight: existing account check for email                        |
+| `POST /api/auth/extension/guest-login`           | None             | Guest (player) auth: create or resume guest session                 |
+| `POST /api/auth/extension/dm-link`               | Full-account JWT | DM only: link full account to DDB campaign — see DM-LINK.md         |
+| `POST /api/auth/extension/credential/exchange`   | None             | Returning user: exchange device credential for a fresh JWT          |
+| `POST /api/auth/login`                           | None             | Full account auth (if user has password)                            |
+| `POST /api/auth/upgrade`                         | Guest token      | Upgrade guest → full account                                        |
+| `POST /api/campaigns/:campaignId/session/ensure` | Extension token  | Create IDLE session if none exists; returns existing session if any |
+| `POST /api/integrations/external/avatar-upload`  | Token            | Upload avatar image; returns hosted `avatarUrl`                     |
+| `POST /api/integrations/external/sync`           | Token            | Push character/campaign updates per sync policy                     |
+| `POST /api/integrations/external/dm-sync`        | DM token         | DM-only: push full campaign + party data after connect or on demand |
+| `POST /api/integrations/logs/ingest`             | Token            | External log ingestion (rolls, attacks, etc.)                       |
+| `POST /api/livekit/token`                        | Token            | LiveKit room token                                                  |
 
 ### Message Flow
 
