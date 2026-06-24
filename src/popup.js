@@ -302,6 +302,61 @@ function renderDmCampaigns(ddbOwnedCampaigns, dmConnections, ddbUser) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Campaign shield icon — unique per campaign, D&D heraldic aesthetic
+// ---------------------------------------------------------------------------
+
+const SHIELD_PALETTES = [
+  { bg1: "#6b1515", bg2: "#2a0808", border: "#d4af37", text: "#ffd98a" }, // Crimson Dragon
+  { bg1: "#152b6b", bg2: "#080e2a", border: "#7db8ff", text: "#c8dcff" }, // Arcane Sapphire
+  { bg1: "#155a22", bg2: "#082810", border: "#8dce5e", text: "#c8ffdb" }, // Verdant Forest
+  { bg1: "#4a156b", bg2: "#1e0828", border: "#c07cff", text: "#e8c8ff" }, // Mystic Amethyst
+  { bg1: "#6b4c00", bg2: "#2a1e00", border: "#ffcc44", text: "#fff0a0" }, // Ancient Gold
+  { bg1: "#0d4860", bg2: "#051824", border: "#50c8e8", text: "#b8f0ff" }, // Glacial Ice
+  { bg1: "#6b2c00", bg2: "#2a1000", border: "#ff8030", text: "#ffd0a0" }, // Infernal Ember
+  { bg1: "#252540", bg2: "#0d0d1a", border: "#9898d0", text: "#dcdcff" }, // Shadow Slate
+];
+
+const SKIP_WORDS = new Set(["a","an","the","to","of","in","on","at","for","and","or","but","with","by","from"]);
+
+function campaignShieldIcon(campaign) {
+  const name = campaign.name || "";
+  const words = name.trim().split(/\s+/).filter(w => w.length > 0 && !SKIP_WORDS.has(w.toLowerCase()));
+  let initials;
+  if (!words.length) initials = "??";
+  else if (words.length === 1) initials = words[0].slice(0, 2).toUpperCase();
+  else initials = (words[0][0] + words[1][0]).toUpperCase();
+
+  // djb2-style hash of campaign ID → deterministic palette
+  const idStr = String(campaign.id ?? 0);
+  let h = 5381;
+  for (let i = 0; i < idStr.length; i++) h = (((h << 5) + h) ^ idStr.charCodeAt(i)) >>> 0;
+  const p = SHIELD_PALETTES[h % SHIELD_PALETTES.length];
+
+  // Unique IDs for SVG defs so multiple shields on the same page don't clash
+  const uid = `csg${idStr.replace(/\D/g, "")}`;
+
+  // Classic heater-shield paths in a 36×42 viewBox
+  const outer = "M2,2 L34,2 Q36,2 36,6 L36,26 Q36,36 18,42 Q0,36 0,26 L0,6 Q0,2 2,2 Z";
+  const inner = "M5,5 L31,5 Q33,5 33,8 L33,25 Q33,32 18,37 Q3,32 3,25 L3,8 Q3,5 5,5 Z";
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 42" width="34" height="40" style="display:block">` +
+    `<defs>` +
+    `<linearGradient id="${uid}" x1="0" y1="0" x2="1" y2="1">` +
+    `<stop offset="0%" stop-color="${p.bg1}"/>` +
+    `<stop offset="100%" stop-color="${p.bg2}"/>` +
+    `</linearGradient>` +
+    `</defs>` +
+    `<path d="${outer}" fill="url(#${uid})" stroke="${p.border}" stroke-width="1.5"/>` +
+    `<path d="${inner}" fill="none" stroke="${p.border}" stroke-width="0.6" opacity="0.55"/>` +
+    `<line x1="7" y1="22" x2="29" y2="22" stroke="${p.border}" stroke-width="0.7" opacity="0.6"/>` +
+    `<text x="18" y="16" font-family="Georgia,serif" font-size="12" font-weight="bold" fill="${p.text}" text-anchor="middle" dominant-baseline="middle">${initials}</text>` +
+    `<path d="M18,26.5 L21.5,30 L18,33.5 L14.5,30 Z" fill="${p.border}" opacity="0.75"/>` +
+    `</svg>`
+  );
+}
+
 function buildDmCard(campaign, conn) {
   const card = document.createElement("div");
   card.className = "char-card";
@@ -309,7 +364,7 @@ function buildDmCard(campaign, conn) {
 
   const badge = document.createElement("div");
   badge.className = "dm-badge";
-  badge.textContent = "DM";
+  badge.innerHTML = campaignShieldIcon(campaign);
 
   const info = document.createElement("div");
   info.className = "char-info";
