@@ -644,7 +644,28 @@ async function injectCharacterPageButtons() {
   const BTN_CLASS =
     "ct-theme-button ct-theme-button--outline ct-theme-button--interactive " +
     "ct-button character-button ddbc-button character-button-small";
-  const BTN_BG = "rgba(26, 58, 107, 0.5)";
+  const BTN_BG = "rgba(26, 58, 107, 0.6)";
+
+  // EXTRACT button — copies full character JSON to clipboard
+  if (!document.getElementById(infoId)) {
+    const infoBtn = document.createElement("button");
+    infoBtn.id = infoId;
+    infoBtn.textContent = "EXTRACT";
+    infoBtn.title = "Copy Character Data to Clipboard";
+    infoBtn.className = BTN_CLASS;
+    infoBtn.style.backgroundColor = BTN_BG;
+
+    infoBtn.addEventListener("click", e => { e.stopImmediatePropagation(); }, true);
+    infoBtn.addEventListener("click", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      void copyCharacterInfoToClipboard(charId, infoBtn);
+    });
+
+    // INFO goes directly after menuCallout (which contains the existing "Manage" button)
+    menuCallout.insertAdjacentElement("afterend", infoBtn);
+  }
 
   // SYNC button — refresh SVG, spins while fetching, inserted first (closest to MANAGE)
   if (!document.getElementById(syncId)) {
@@ -653,11 +674,13 @@ async function injectCharacterPageButtons() {
     syncBtn.title = "Sync Character to VTT-Chat";
     syncBtn.className = BTN_CLASS;
     syncBtn.style.backgroundColor = BTN_BG;
+    syncBtn.style.padding = "1px 6px"; // default padding is too large for 12x12 icon
+    syncBtn.style.margin = "0 4px"; // separate from INFO button
 
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
+    svg.setAttribute("width", "12");
+    svg.setAttribute("height", "12");
     svg.setAttribute("fill", "currentColor");
     svg.style.display = "block";
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -669,9 +692,11 @@ async function injectCharacterPageButtons() {
     svg.appendChild(path);
     syncBtn.appendChild(svg);
 
+    syncBtn.addEventListener("click", e => { e.stopImmediatePropagation(); }, true);
     syncBtn.addEventListener("click", async e => {
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
       syncBtn.disabled = true;
       svg.style.animation = "vtt-spin 0.8s linear infinite";
       try {
@@ -682,27 +707,9 @@ async function injectCharacterPageButtons() {
       }
     });
 
-    menuCallout.insertAdjacentElement("afterend", syncBtn);
-  }
-
-  // INFO button — copies full character JSON to clipboard
-  if (!document.getElementById(infoId)) {
-    const infoBtn = document.createElement("button");
-    infoBtn.id = infoId;
-    infoBtn.textContent = "INFO";
-    infoBtn.title = "Copy Character Data to Clipboard";
-    infoBtn.className = BTN_CLASS;
-    infoBtn.style.backgroundColor = BTN_BG;
-
-    infoBtn.addEventListener("click", e => {
-      e.preventDefault();
-      e.stopPropagation();
-      void copyCharacterInfoToClipboard(charId, infoBtn);
-    });
-
-    // INFO goes after SYNC (or directly after menuCallout if SYNC wasn't injected)
-    const syncEl = document.getElementById(syncId);
-    (syncEl ?? menuCallout).insertAdjacentElement("afterend", infoBtn);
+    // SYNC goes after EXTRACT (or directly after menuCallout if INFO wasn't injected)
+    const extractEl = document.getElementById(infoId);
+    (extractEl ?? menuCallout).insertAdjacentElement("afterend", syncBtn);
   }
 }
 
