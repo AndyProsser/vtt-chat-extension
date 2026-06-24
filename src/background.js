@@ -188,6 +188,52 @@ async function ensureRenewedGuestToken(server) {
   return guestSession.token;
 }
 
+// Rehydrates guestSession from storage + credential exchange when the service
+// worker has been killed and restarted since the user last connected.
+async function ensureGuestSession() {
+  if (guestSession?.token && !isTokenNearExpiry(guestSession)) return guestSession;
+
+  const state = await getState();
+  const { lastSession } = state;
+  if (!lastSession?.serverId || !lastSession?.campaignId) return null;
+
+  const server = state.servers.find(s => s.id === lastSession.serverId);
+  if (!server) return null;
+
+  // In-memory token may still be valid even if near-expiry check above tripped
+  if (guestSession?.token) return guestSession;
+
+  // Exchange stored device credential for a fresh token
+  const credential = await getDeviceCredential(server.id);
+  if (!credential) return null;
+
+  const deviceId = await getDeviceId();
+  const exchanged = await apiJson(server, "/api/auth/extension/credential/exchange", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential, deviceId })
+  });
+
+  if (!exchanged.response.ok || !exchanged.json.token) return null;
+
+  if (exchanged.json.credential) {
+    await setDeviceCredential(server.id, exchanged.json.credential);
+  }
+
+  guestSession = {
+    token: exchanged.json.token,
+    expiresAt: tokenExpiryMs(exchanged.json.token),
+    campaignId: exchanged.json.user?.campaignId || lastSession.campaignId,
+    inviteCode: lastSession.inviteCode,
+    renewalPayload: null,
+    user: exchanged.json.user || null,
+    character: null,
+    authType: lastSession.authType || "GUEST"
+  };
+
+  return guestSession;
+}
+
 // ---------------------------------------------------------------------------
 // API helpers
 // ---------------------------------------------------------------------------
@@ -811,13 +857,16 @@ async function triggerInitialCharacterSync(characterId) {
 // ---------------------------------------------------------------------------
 
 async function handleCharacterDataUpdated(payload) {
+  const session = await ensureGuestSession();
+  if (!session) return;
+
   const server = await getActiveServer();
-  if (!server || !guestSession?.token) return;
+  if (!server) return;
 
   const token = await ensureRenewedGuestToken(server);
-  if (!token || !guestSession?.campaignId) return;
+  if (!token || !session.campaignId) return;
 
-  await syncCharacterAndCampaign(server, token, guestSession.campaignId, {
+  await syncCharacterAndCampaign(server, token, session.campaignId, {
     character: payload
   });
 }
