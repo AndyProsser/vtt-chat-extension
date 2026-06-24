@@ -9,21 +9,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [0.3.14] — 2026-06-24
+## [0.4.0] — 2026-06-24
 
 ### Added
 
 - Manual **SYNC button** (refresh SVG icon) injected on D&D Beyond character sheet pages alongside the INFO button. Clicking it forces a full character data sync to the VTT-Chat backend. SVG spins and the button is disabled while the sync is in progress.
 - `@keyframes vtt-spin` style tag injected once per page to drive the spin animation.
-- `ensureGuestSession()` in `background.js` — rehydrates `guestSession` from `lastSession` storage + device credential exchange when the MV3 service worker has been killed and restarted since the user last connected. Fixes manual sync (and any other handler guarded by `guestSession`) silently doing nothing after browser idle restarts the worker.
+- `ensureGuestSession()` in `background.js` — rehydrates `guestSession` from `lastSession` storage + device credential exchange when the MV3 service worker has been killed and restarted since the user last connected. Falls back to `lastSession.token` directly when no device credential is stored, so manual sync works even when the backend does not issue device credentials.
 - Complete icon set: `icon-16.png`, `icon-32.png`, `icon-128.png`, `icon-256.png` generated from the source `icon.png`. All sizes declared in `icons` and `action.default_icon` across all manifests.
+- `decodeHtml()` helper — uses a `<textarea>` to let the browser decode all HTML entities (`&amp;`, `&lt;`, `&#8212;`, etc.) from API text fields. Applied to character names, race, class, campaign names, DM usernames, descriptions, and public notes throughout `content.js`.
+- `dmUsername` and `dateCreated` captured in `normalizeOwnedCampaigns()` and included in the DM sync payload's `campaignData`.
+- DM campaign card now shows `dmUsername` in the detail line when present (e.g. "4 members · DM: wizardpete") — useful in DEV override mode.
 - `CHANGELOG.md` (this file).
 - `docs/STORE-SUBMISSION.md` — store listing copy, permissions justification, privacy policy text, asset checklist, and per-store submission steps for Chrome Web Store, Firefox AMO, and Microsoft Edge Add-ons.
+- `[VTT-SYNC]` console trace logging added through the full sync chain (`handleRefetchCharacter` → `handleCharacterDataUpdated` → `syncCharacterAndCampaign`) to aid debugging.
 
 ### Fixed
 
-- Manual SYNC button was silently doing nothing: `handleCharacterDataUpdated` in `background.js` guarded on the in-memory `guestSession` which is `null` after an MV3 service worker restart. Now calls `ensureGuestSession()` first to restore the session before attempting the sync.
-- Button clicks on injected SYNC and INFO buttons were being captured by D&D Beyond's Google Tag Manager. Both buttons now use `stopImmediatePropagation()` (replacing `stopPropagation()`) in both bubble and capture phases to prevent GTM from seeing the events.
+- Manual SYNC button was silently doing nothing after an MV3 service worker restart: `handleCharacterDataUpdated` guarded on in-memory `guestSession` (always `null` after idle restart). Fixed by calling `ensureGuestSession()` first, which restores the session from storage.
+- `browser.runtime.sendMessage` in `handleRefetchCharacter` was not awaited — errors (including send failures) were silently swallowed. Now awaited so failures surface correctly.
+- `ensureGuestSession` previously returned `null` when no device credential was stored, even though `lastSession.token` was available in storage. Now falls back to that token so the sync attempt is made.
+- `normalizeOwnedCampaigns` was reading `item.memberCount` (undefined) instead of `item.playerCount` — DM campaign cards always showed "Dungeon Master" rather than the actual member count.
+- Button clicks on injected SYNC and INFO buttons were being captured by D&D Beyond's Google Tag Manager. Both buttons now use `stopImmediatePropagation()` (replacing `stopPropagation()`) in both bubble and capture phases.
 
 ### Removed
 

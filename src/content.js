@@ -83,7 +83,17 @@ function extractDdbUser() {
 }
 
 //
-// 2. AUTH + CHARACTER LIST
+// 2. HTML ENTITY DECODING
+//
+function decodeHtml(str) {
+  if (!str || typeof str !== "string") return str;
+  const el = document.createElement("textarea");
+  el.innerHTML = str;
+  return el.value;
+}
+
+//
+// 3. AUTH + CHARACTER LIST
 //
 async function fetchCobaltAuthToken() {
   const res = await fetch("https://auth-service.dndbeyond.com/v1/cobalt-token", {
@@ -118,13 +128,13 @@ function normalizeCharacterList(raw) {
   if (!raw || !raw.characters) return [];
   return raw.characters.map(c => ({
     id: c.id,
-    name: c.name,
+    name: decodeHtml(c.name),
     level: c.level,
-    race: c.raceName,
-    class: c.classDescription,
+    race: decodeHtml(c.raceName),
+    class: decodeHtml(c.classDescription),
     avatar: c.avatarUrl,
     campaignId: c.campaignId,
-    campaignName: c.campaignName
+    campaignName: decodeHtml(c.campaignName)
   }));
 }
 
@@ -167,7 +177,7 @@ function buildCampaignPacket(details) {
   if (!details) return null;
   return {
     externalCampaignId: String(details.id || ""),
-    campaignName: details.name || null,
+    campaignName: decodeHtml(details.name) || null,
     dmExternalUserId: String(details.dmId || ""),
     members: normalizeCampaignMembers(details)
   };
@@ -489,10 +499,10 @@ function normalizeOwnedCampaigns(raw) {
     const item = (c?.data && typeof c.data === "object" && !Array.isArray(c.data)) ? c.data : c;
     return {
       id: item.id,
-      name: item.name || null,
+      name: decodeHtml(item.name) || null,
       memberCount: item.playerCount || null,
       dateCreated: item.dateCreated || null,
-      dmUsername: item.dmUsername || null,
+      dmUsername: decodeHtml(item.dmUsername) || null,
       dmId: item.dmId || null
     };
   });
@@ -548,11 +558,11 @@ async function buildDmCampaignPayload(ddbCampaignId) {
   return {
     externalCampaignId: String(details.id || ddbCampaignId),
     campaignData: {
-      name: details.name || null,
-      description: details.description || null,
-      publicNotes: details.publicNotes || null,
+      name: decodeHtml(details.name) || null,
+      description: decodeHtml(details.description) || null,
+      publicNotes: decodeHtml(details.publicNotes) || null,
       dmExternalUserId: String(details.dmId || ""),
-      dmUsername: details.dmUsername || null,
+      dmUsername: decodeHtml(details.dmUsername) || null,
       dateCreated: details.dateCreated || null,
       memberCount: members.length
     },
