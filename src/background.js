@@ -5,6 +5,7 @@ if (typeof browser === "undefined") {
 
 const TOKEN_RENEWAL_WINDOW_MS = 15 * 60 * 1000;
 const EXTERNAL_SYSTEM = "dndbeyond";
+const DM_SYNC_THROTTLE_MS = 10 * 60 * 1000;
 
 let guestSession = null;
 
@@ -53,6 +54,14 @@ browser.runtime.onMessage.addListener((msg) => {
 
   if (msg.type === "dm-campaign-sync") {
     return runDmCampaignSync(msg.payload || {});
+  }
+
+  if (msg.type === "dm-link-launch") {
+    return handleDmLinkLaunch(msg.payload || {});
+  }
+
+  if (msg.type === "dm-returning-launch") {
+    return handleDmReturningLaunch(msg.payload || {});
   }
 });
 
@@ -115,6 +124,53 @@ async function getDeviceCredential(serverId) {
 async function setDeviceCredential(serverId, credential) {
   if (!serverId || !credential) return;
   await browser.storage.local.set({ [`dc:${serverId}`]: credential });
+}
+
+// ---------------------------------------------------------------------------
+// DM link credential helpers (stored per DDB campaign in browser.storage.local)
+// ---------------------------------------------------------------------------
+
+async function getDmLinkRecord(externalCampaignId) {
+  const key = `dmlink:${externalCampaignId}:dndbeyond`;
+  const data = await browser.storage.local.get(key);
+  return data[key] || null;
+}
+
+async function setDmLinkRecord(externalCampaignId, record) {
+  await browser.storage.local.set({ [`dmlink:${externalCampaignId}:dndbeyond`]: record });
+}
+
+async function clearDmLinkRecord(externalCampaignId) {
+  await browser.storage.local.remove(`dmlink:${externalCampaignId}:dndbeyond`);
+}
+
+async function isDmSyncThrottled(campaignId) {
+  const data = await browser.storage.local.get(`dmsync:${campaignId}`);
+  const lastSyncAt = data[`dmsync:${campaignId}`]?.lastSyncAt;
+  if (!lastSyncAt) return false;
+  return Date.now() - new Date(lastSyncAt).getTime() < DM_SYNC_THROTTLE_MS;
+}
+
+async function recordDmSync(campaignId) {
+  await browser.storage.local.set({ [`dmsync:${campaignId}`]: { lastSyncAt: new Date().toISOString() } });
+}
+
+// Updates the dmConnections entry from the background (after DM link completes)
+async function updateDmConnectionsFromBackground(ddbCampaignId, updates) {
+  const { dmConnections: conns = [] } = await browser.storage.local.get("dmConnections");
+  const strId = String(ddbCampaignId);
+  const existing = conns.find(c => String(c.ddbCampaignId) === strId);
+  const updated = {
+    id: existing?.id ?? crypto.randomUUID(),
+    ddbCampaignId: strId,
+    lastConnectedAt: Date.now(),
+    ...existing,
+    ...updates
+  };
+  const next = existing
+    ? conns.map(c => String(c.ddbCampaignId) === strId ? updated : c)
+    : [...conns, updated];
+  await browser.storage.local.set({ dmConnections: next });
 }
 
 // ---------------------------------------------------------------------------
@@ -487,7 +543,7 @@ async function buildDmCampaignPayloadDirect(ddbCampaignId) {
           };
         }
       }
-    } catch {}
+    } catch { /* character fetch failed — fall back to basic member data */ }
     return {
       externalCharacterId: String(charId),
       externalUserId: String(member.userId || ""),
@@ -514,48 +570,192 @@ async function buildDmCampaignPayloadDirect(ddbCampaignId) {
   };
 }
 
-async function runDmCampaignSync({ ddbCampaignId, campaignId }) {
-  if (!ddbCampaignId) return { ok: false, error: "No DDB campaign ID provided" };
-
-  const server = await getActiveServer();
-  if (!server) return { ok: false, error: "No active server configured" };
-
-  // Use ensureGuestSession so this survives MV3 service worker restarts
-  const session = await ensureGuestSession();
-  if (!session) return { ok: false, error: "No active DM session — please reconnect" };
-
-  const token = await ensureRenewedGuestToken(server);
-  if (!token) return { ok: false, error: "Session token unavailable — please reconnect" };
-
-  const resolvedCampaignId = campaignId || session.campaignId;
-  if (!resolvedCampaignId) return { ok: false, error: "No campaign ID — please reconnect" };
-
-  // Prefer a live DDB tab: the content script can run full character stat extraction
+// Fetches DM campaign data (live DDB tab first, cookie fallback) and syncs it.
+// Returns true on success, false if data could not be fetched.
+async function fetchAndSyncDmCampaign(server, token, campaignId, ddbCampaignId) {
   let dmPayload = null;
   try {
     const tabs = await browser.tabs.query({ url: "*://*.dndbeyond.com/*" });
     for (const tab of tabs) {
       try {
-        dmPayload = await browser.tabs.sendMessage(tab.id, {
-          type: "dm-fetch-campaign-data",
-          ddbCampaignId
-        });
+        dmPayload = await browser.tabs.sendMessage(tab.id, { type: "dm-fetch-campaign-data", ddbCampaignId });
         if (dmPayload) break;
-      } catch {}
+      } catch { /* tab may not have content script */ }
     }
-  } catch {}
+  } catch { /* tabs query failure */ }
+  if (!dmPayload) dmPayload = await buildDmCampaignPayloadDirect(ddbCampaignId);
+  if (!dmPayload) return false;
+  await syncDmCampaignData(server, token, campaignId, dmPayload);
+  return true;
+}
 
-  // No DDB tab available — build payload directly using DDB session cookies
-  if (!dmPayload) {
-    dmPayload = await buildDmCampaignPayloadDirect(ddbCampaignId);
+async function runDmCampaignSync({ ddbCampaignId, campaignId, bypassThrottle }) {
+  if (!ddbCampaignId) return { ok: false, error: "No DDB campaign ID provided" };
+
+  const server = await getActiveServer();
+  if (!server) return { ok: false, error: "No active server configured" };
+
+  let token = null;
+  let resolvedCampaignId = campaignId || null;
+
+  // Try DM link credential first (full-account token — preferred for DM ops)
+  const dmLink = await getDmLinkRecord(ddbCampaignId);
+  if (dmLink?.deviceCredential?.credential && dmLink?.campaignId) {
+    const deviceId = await getDeviceId();
+    const exchanged = await apiJson(server, "/api/auth/extension/credential/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: dmLink.deviceCredential.credential, deviceId })
+    });
+    if (exchanged.response.ok && exchanged.json.token) {
+      token = exchanged.json.token;
+      resolvedCampaignId = resolvedCampaignId || dmLink.campaignId;
+      if (exchanged.json.credential) {
+        await setDmLinkRecord(ddbCampaignId, {
+          ...dmLink,
+          deviceCredential: { credential: exchanged.json.credential, deviceId }
+        });
+      }
+    }
   }
 
-  if (!dmPayload) {
-    return { ok: false, error: "Could not fetch campaign data — ensure you are signed in to D&D Beyond" };
+  // Fall back to guest session (backward compat)
+  if (!token) {
+    const session = await ensureGuestSession();
+    if (!session) return { ok: false, error: "No active DM session — please reconnect" };
+    token = await ensureRenewedGuestToken(server);
+    resolvedCampaignId = resolvedCampaignId || session.campaignId;
   }
 
-  await syncDmCampaignData(server, token, resolvedCampaignId, dmPayload);
+  if (!token || !resolvedCampaignId) {
+    return { ok: false, error: "No active DM session — please reconnect" };
+  }
+
+  if (!bypassThrottle && await isDmSyncThrottled(resolvedCampaignId)) {
+    return { ok: true, throttled: true };
+  }
+
+  const ok = await fetchAndSyncDmCampaign(server, token, resolvedCampaignId, String(ddbCampaignId));
+  if (ok) await recordDmSync(resolvedCampaignId);
+  if (!ok) return { ok: false, error: "Could not fetch campaign data — ensure you are signed in to D&D Beyond" };
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// DM link flow handlers
+// ---------------------------------------------------------------------------
+
+// Opens the ext-launch tab with mode=dm-link for first-time DM account linking.
+async function handleDmLinkLaunch({ serverUrl, campaignId, email, externalCampaignId }) {
+  if (!serverUrl || !campaignId || !externalCampaignId) {
+    return { ok: false, error: "Missing required parameters for DM link" };
+  }
+  const params = new URLSearchParams({ campaignId, mode: "dm-link" });
+  if (email) params.set("hint", email);
+  browser.tabs.create({ url: `${baseServerUrl(serverUrl)}/ext-launch?${params}` });
+  return { ok: true };
+}
+
+// Exchanges the stored DM credential for a fresh token, fires throttled dm-sync, and opens the campaign tab.
+async function handleDmReturningLaunch({ externalCampaignId }) {
+  const record = await getDmLinkRecord(externalCampaignId);
+  if (!record?.deviceCredential?.credential || !record?.campaignId) {
+    return { ok: false, error: "No DM link found — please re-link", credentialExpired: true };
+  }
+
+  const server = await getActiveServer();
+  if (!server) return { ok: false, error: "No active server configured" };
+
+  const deviceId = await getDeviceId();
+  const exchanged = await apiJson(server, "/api/auth/extension/credential/exchange", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential: record.deviceCredential.credential, deviceId })
+  });
+
+  if (!exchanged.response.ok) {
+    const code = exchanged.json?.code;
+    if (code === "CREDENTIAL_INVALID" || code === "CREDENTIAL_EXPIRED_GUEST") {
+      await clearDmLinkRecord(externalCampaignId);
+      return { ok: false, error: "DM link expired — please re-link", credentialExpired: true };
+    }
+    return { ok: false, error: exchanged.json?.message || "DM authentication failed — please re-link" };
+  }
+
+  const token = exchanged.json.token;
+  const campaignId = record.campaignId;
+
+  if (exchanged.json.credential) {
+    await setDmLinkRecord(externalCampaignId, {
+      ...record,
+      deviceCredential: { credential: exchanged.json.credential, deviceId }
+    });
+  }
+
+  // Throttled DM sync — runs in background, doesn't block launch
+  const shouldSync = !await isDmSyncThrottled(campaignId);
+  if (shouldSync) {
+    void (async () => {
+      const ok = await fetchAndSyncDmCampaign(server, token, campaignId, String(externalCampaignId));
+      if (ok) await recordDmSync(campaignId);
+    })();
+  }
+
+  const session = await ensureSession(server, token, campaignId);
+  await launchTab(server, campaignId, token, session?.sessionId || null);
+  return { ok: true };
+}
+
+// Processes the VTT_CHAT_DM_LINK_COMPLETE signal from the ext-launch tab.
+async function handleDmLinkComplete(payload, tabUrl) {
+  const { campaignId, externalCampaignId, deviceCredential } = payload;
+  if (!campaignId || !externalCampaignId || !deviceCredential?.credential) return;
+
+  let tabOrigin;
+  try { tabOrigin = new URL(tabUrl).origin; } catch { return; }
+
+  const state = await getState();
+  const knownServer = state.servers.find(s => {
+    try { return new URL(s.url).origin === tabOrigin; } catch { return false; }
+  });
+  if (!knownServer) return;
+
+  const deviceId = await getDeviceId();
+
+  await setDmLinkRecord(String(externalCampaignId), {
+    campaignId,
+    externalCampaignId: String(externalCampaignId),
+    serverUrl: knownServer.url,
+    deviceCredential: { credential: deviceCredential.credential, deviceId }
+  });
+
+  await updateDmConnectionsFromBackground(externalCampaignId, {
+    campaignId, serverUrl: knownServer.url, serverId: knownServer.id
+  });
+
+  // Exchange credential for a token to fire the initial sync
+  const exchanged = await apiJson(knownServer, "/api/auth/extension/credential/exchange", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential: deviceCredential.credential, deviceId })
+  });
+  if (!exchanged.response.ok) return;
+
+  const token = exchanged.json.token;
+  if (exchanged.json.credential) {
+    await setDmLinkRecord(String(externalCampaignId), {
+      campaignId,
+      externalCampaignId: String(externalCampaignId),
+      serverUrl: knownServer.url,
+      deviceCredential: { credential: exchanged.json.credential, deviceId }
+    });
+  }
+
+  // Initial sync: no throttle on first link
+  void fetchAndSyncDmCampaign(knownServer, token, String(campaignId), String(externalCampaignId));
+  await recordDmSync(String(campaignId));
+
+  void ensureSession(knownServer, token, String(campaignId));
 }
 
 // ---------------------------------------------------------------------------
@@ -1170,3 +1370,19 @@ async function handleConnect(payload) {
   const session = campaignId ? await ensureSession(server, loginResult.token, campaignId) : null;
   await launchTab(server, campaignId, loginResult.token, session?.sessionId || null);
 }
+
+
+// ---------------------------------------------------------------------------
+// DM link completion detector — wakes the SW even after a restart
+// ---------------------------------------------------------------------------
+
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!changeInfo.url) return;
+  const MARKER = "#VTT_CHAT_DM_LINK_COMPLETE=";
+  const idx = changeInfo.url.indexOf(MARKER);
+  if (idx === -1) return;
+  try {
+    const payload = JSON.parse(atob(changeInfo.url.slice(idx + MARKER.length)));
+    void handleDmLinkComplete(payload, changeInfo.url);
+  } catch { /* malformed payload — ignore */ }
+});
