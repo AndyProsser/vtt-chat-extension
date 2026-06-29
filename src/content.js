@@ -416,7 +416,7 @@ function extractInventory(data) {
       equipped: item.equipped || false,
       isAttuned: item.isAttuned || false,
       chargesUsed: item.chargesUsed || 0,
-      weight: def.weight || 0,
+      weight: def.bundleSize > 1 ? (def.weight || 0) / def.bundleSize : (def.weight || 0),
       cost: def.cost ?? null,
       isContainer,
       containerEntityId: item.containerEntityId || null,
