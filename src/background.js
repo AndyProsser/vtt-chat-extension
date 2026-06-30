@@ -1261,7 +1261,8 @@ async function handleCharacterDataUpdated(payload) {
   if (!token || !session.campaignId) return;
 
   await syncCharacterAndCampaign(server, token, session.campaignId, {
-    character: payload
+    character: payload,
+    partyInventory: payload.partyInventory || null
   });
 }
 
