@@ -10,7 +10,8 @@
   "permissions": [
     "storage",
     "cookies",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
   "host_permissions": [
     "https://www.dndbeyond.com/*",

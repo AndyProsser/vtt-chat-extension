@@ -286,13 +286,32 @@ When `campaignData.name` is present in a `POST /api/integrations/external/dm-syn
 
 ## 9. Completion Signal — /ext-launch → Extension
 
-After a successful `dm-link` call, the `/ext-launch` page signals the background script by appending a base64-encoded payload to the tab URL as a hash fragment:
+After a successful `dm-link` call, the `/ext-launch` page signals the extension that the link is complete. Two transports are supported; the extension handles both and dedupes them, so the server may emit either or both:
+
+**Primary — `window.postMessage` (relayed by a content script):**
+
+```js
+window.postMessage(
+  { type: "VTT_CHAT_DM_LINK_COMPLETE", payload: { campaignId, deviceCredential, merged } },
+  window.location.origin
+)
+```
+
+The extension registers a content script (`vtt-chat-content.js`) on the configured server origin(s). It listens for this message and relays it to the service worker via `runtime.sendMessage`. The worker receives `sender.tab.url` — the `/ext-launch` URL, whose query params still carry `externalCampaignId` (set in step 6 of §4).
+
+> A content script is required because Chrome content scripts run in an isolated JS realm and cannot receive `BroadcastChannel` messages from the page, even in the same tab. `window.postMessage` does cross into that realm.
+>
+> The relay is registered **dynamically** (`scripting.registerContentScripts`) for each server in `browser.storage.local.servers[]`, not via a static manifest entry, because the server URL is user-configured. The registration is re-synced whenever the server list changes. This adds the `scripting` permission.
+
+**Fallback — URL hash fragment:**
 
 ```text
 #VTT_CHAT_DM_LINK_COMPLETE=<base64url(JSON)>
 ```
 
-The JSON payload is:
+Detected via `browser.tabs.onUpdated`, decoded, and routed through the same handler. This path survives a service-worker restart without a live content script.
+
+In both cases the JSON payload is:
 
 ```json
 {
@@ -307,14 +326,13 @@ The JSON payload is:
 
 Note: the payload does **not** include `externalCampaignId`. The background script reads `externalCampaignId` from the tab's URL query params (set in step 6 of §4).
 
-The background script must:
+On either signal, the background script:
 
-1. Listen for URL changes via `browser.tabs.onUpdated`.
-2. Detect the `#VTT_CHAT_DM_LINK_COMPLETE=` fragment in the updated URL.
-3. Decode and parse the base64 payload.
-4. Read `externalCampaignId` from the tab URL's query params.
-5. Store `deviceCredential` in `browser.storage.local` keyed by `dmlink:<externalCampaignId>:<externalSystem>`.
-6. Exchange the credential for a fresh JWT and auto-launch the DM session.
+1. Decodes/receives the payload (`campaignId` + `deviceCredential`).
+2. Reads `externalCampaignId` from the tab URL's query params.
+3. Dedupes against the other transport (keyed by `campaignId` + credential) so the session is not launched twice.
+4. Stores `deviceCredential` in `browser.storage.local` keyed by `dmlink:<externalCampaignId>:<externalSystem>`.
+5. Exchanges the credential for a fresh JWT and auto-launches the DM session.
 
 If `merged: true`, the extension may optionally surface a one-time informational toast: _"A prior guest session was merged into your account."_
 
@@ -377,7 +395,7 @@ Note: the vtt-chat `campaignId` (UUID) is not known from the DDB page alone. Ste
 
 - Disable button, show spinner
 - Open `/ext-launch?campaignId=<uuid>&mode=dm-link&hint=<email>&externalUserId=<id>&externalCampaignId=<ddb-id>&externalSystem=dndbeyond&deviceId=<uuid>&campaignName=<name>` in a new tab
-- Background detects `#VTT_CHAT_DM_LINK_COMPLETE=` hash via `tabs.onUpdated` (§9)
+- Background receives the `VTT_CHAT_DM_LINK_COMPLETE` signal — postMessage relay or hash fallback (§9)
 - On detection: stores credential, exchanges it, auto-launches DM session
 
 #### 10.2b Returning DM (device credential present)
@@ -414,7 +432,7 @@ The `/ext-launch` route with `mode=dm-link` must:
      - On `409 IDENTITY_CONFLICT`: show _"This DDB account is already linked to a different vtt-chat login. Please contact support."_ Do not proceed.
    - **Step 2 — dm-sync:** `POST /api/integrations/external/dm-sync` to update campaign name. Progress label: _"Syncing campaign from D&D Beyond…"_ (best-effort; non-fatal).
    - **Step 3 — session/ensure:** `POST /api/campaigns/:campaignId/session/ensure`. Progress label: _"Preparing your session…"_ Captures the real `sessionId` for the redirect.
-   - **Step 4 — signal:** Append `#VTT_CHAT_DM_LINK_COMPLETE=<base64>` to the tab URL (§9). Progress label: _"Launching campaign…"_
+   - **Step 4 — signal:** Emit `VTT_CHAT_DM_LINK_COMPLETE` — `window.postMessage` (primary) and/or the `#VTT_CHAT_DM_LINK_COMPLETE=<base64>` URL hash (fallback) (§9). Progress label: _"Launching campaign…"_
    - Redirect to campaign workspace via the lobby auto-enter pattern.
 
 ### 10.4 Invite Code Handling

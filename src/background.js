@@ -9,7 +9,15 @@ const DM_SYNC_THROTTLE_MS = 10 * 60 * 1000;
 
 let guestSession = null;
 
-browser.runtime.onMessage.addListener((msg) => {
+browser.runtime.onMessage.addListener((msg, sender) => {
+  // Relayed from the vtt-chat content script when /ext-launch posts the
+  // DM-link completion signal to its own window. sender.tab.url carries the
+  // ext-launch URL, whose query params include externalCampaignId.
+  if (msg.type === "VTT_CHAT_DM_LINK_COMPLETE") {
+    void handleDmLinkComplete(msg.payload, sender?.tab?.url);
+    return;
+  }
+
   if (msg.type === "connect") {
     void handleConnect(msg.payload);
     return;
@@ -737,12 +745,25 @@ async function handleDmReturningLaunch({ externalCampaignId }) {
   return { ok: true };
 }
 
+// Tracks DM links handled in the last few seconds so the postMessage relay and
+// the URL-hash fallback can both fire for the same completion without launching
+// the session (or re-syncing) twice.
+const recentlyHandledDmLinks = new Set();
+
 // Processes the VTT_CHAT_DM_LINK_COMPLETE signal from the ext-launch tab.
+// Reached via two paths: the content-script postMessage relay (tabUrl =
+// sender.tab.url) and the URL-hash fallback (tabUrl = the updated tab URL).
 async function handleDmLinkComplete(payload, tabUrl) {
   // The payload only carries campaignId + deviceCredential (no externalCampaignId).
   // Parse externalCampaignId from the tab URL query params — it was sent there in handleDmLinkLaunch.
-  const { campaignId, deviceCredential } = payload;
+  const { campaignId, deviceCredential } = payload || {};
   if (!campaignId || !deviceCredential?.credential) return;
+
+  // Dedupe across the two signal paths (and any duplicate events on one path).
+  const dedupKey = `${campaignId}:${deviceCredential.credential}`;
+  if (recentlyHandledDmLinks.has(dedupKey)) return;
+  recentlyHandledDmLinks.add(dedupKey);
+  setTimeout(() => recentlyHandledDmLinks.delete(dedupKey), 30000);
 
   let tabOrigin;
   let externalCampaignId;
@@ -1442,6 +1463,9 @@ async function handleConnect(payload) {
 // DM link completion detector — wakes the SW even after a restart
 // ---------------------------------------------------------------------------
 
+// Fallback signal: the /ext-launch page may also append the completion payload
+// as a URL hash. The primary signal is the postMessage relayed by the vtt-chat
+// content script (handled in onMessage); handleDmLinkComplete dedupes the two.
 browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (!changeInfo.url) return;
   const MARKER = "#VTT_CHAT_DM_LINK_COMPLETE=";
@@ -1452,3 +1476,61 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
     void handleDmLinkComplete(payload, changeInfo.url);
   } catch { /* malformed payload — ignore */ }
 });
+
+// ---------------------------------------------------------------------------
+// Dynamic content-script registration for the VTT-Chat server origin(s)
+// ---------------------------------------------------------------------------
+
+// The vtt-chat relay (vtt-chat-content.js) must run on the configured server
+// origins, which are user-supplied and unknown at build time. We register it
+// dynamically — and keep it in sync as servers are added/removed — instead of
+// using a static manifest content_scripts entry.
+const VTT_RELAY_SCRIPT_ID = "vtt-chat-dm-link-relay";
+
+async function syncVttChatContentScripts() {
+  if (!browser.scripting?.registerContentScripts) return;
+
+  const { servers = [] } = await browser.storage.local.get("servers");
+  const matches = [...new Set(
+    servers
+      .map(s => { try { return `${new URL(s.url).origin}/*`; } catch { return null; } })
+      .filter(Boolean)
+  )];
+
+  let existing = [];
+  try {
+    existing = await browser.scripting.getRegisteredContentScripts({ ids: [VTT_RELAY_SCRIPT_ID] });
+  } catch { /* none registered yet */ }
+
+  if (!matches.length) {
+    if (existing.length) {
+      await browser.scripting.unregisterContentScripts({ ids: [VTT_RELAY_SCRIPT_ID] }).catch(() => {});
+    }
+    return;
+  }
+
+  const definition = {
+    id: VTT_RELAY_SCRIPT_ID,
+    js: ["vtt-chat-content.js"],
+    matches,
+    runAt: "document_idle",
+    persistAcrossSessions: true
+  };
+
+  try {
+    if (existing.length) {
+      await browser.scripting.updateContentScripts([definition]);
+    } else {
+      await browser.scripting.registerContentScripts([definition]);
+    }
+  } catch (e) {
+    console.warn("[VTT-Chat] relay content script registration failed:", e);
+  }
+}
+
+// Re-sync whenever the configured server list changes.
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.servers) void syncVttChatContentScripts();
+});
+
+void syncVttChatContentScripts();
