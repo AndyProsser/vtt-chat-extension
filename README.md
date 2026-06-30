@@ -28,6 +28,14 @@ This extension:
 
 ---
 
+## 📸 Screenshots
+
+### Extension Popup
+
+![Extension popup showing character list and campaigns](docs/images/popup-main-view.png)
+
+---
+
 ## 🔧 Development
 
 ### Prerequisites

@@ -711,12 +711,12 @@ async function validateInviteCode(inviteCode) {
   if (!result.response.ok || !result.json.valid) {
     return { ok: false, error: result.json.message || "This code isn't valid" };
   }
-  return { ok: true, campaign: result.json.campaign || null };
+  return { ok: true, campaign: result.json.campaign || null, dev: result.json.dev || null };
 }
 
 // Calls dm-link-init on the backend (auth + link + sync + session in one shot),
 // stores the returned credential, then opens the campaign tab.
-async function handleDmLinkInit({ inviteCode, campaignId, password, externalCampaignId, campaignName }) {
+async function handleDmLinkInit({ inviteCode, campaignId, username, password, externalCampaignId, campaignName }) {
   if (!campaignId || !password || !externalCampaignId) {
     return { ok: false, error: "Missing required parameters" };
   }
@@ -727,13 +727,14 @@ async function handleDmLinkInit({ inviteCode, campaignId, password, externalCamp
   const state = await getState();
   const ddbUser = state.ddbUser || {};
   const email = ddbUser.email || state.savedEmail || "";
+  const resolvedUsername = username || email;
   const deviceId = await getDeviceId();
 
   const result = await apiJson(server, "/api/auth/extension/dm-link-init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      username: email,
+      username: resolvedUsername,
       password,
       campaignId,
       externalSystem: EXTERNAL_SYSTEM,

@@ -32,6 +32,7 @@ function parseInviteUrl(urlStr) {
   } catch { return null; }
 }
 
+
 // ---------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------
@@ -461,20 +462,25 @@ function buildDmExpandForm(campaign, conn, dmLink) {
   wrap.className = "char-expand-form";
   wrap.id = `dm-expand-form-${campaign.id}`;
 
-  const codeLabel = document.createElement("label");
-  codeLabel.textContent = "VTT-Chat Invite Code";
-  const codeInput = document.createElement("input");
-  codeInput.type = "text";
-  codeInput.id = `dm-invite-code-${campaign.id}`;
-  codeInput.placeholder = "e.g. abc123…";
-  codeInput.autocomplete = "off";
-  codeLabel.appendChild(codeInput);
-  wrap.appendChild(codeLabel);
+  const urlLabel = document.createElement("label");
+  urlLabel.textContent = "Invite URL";
+  const urlInput = document.createElement("input");
+  urlInput.type = "url";
+  urlInput.id = `dm-invite-url-${campaign.id}`;
+  urlInput.placeholder = "https://server/join/CODE";
+  urlInput.autocomplete = "off";
+  urlLabel.appendChild(urlInput);
+  wrap.appendChild(urlLabel);
 
-  const codePreview = document.createElement("div");
-  codePreview.className = "url-preview";
-  codePreview.id = `dm-code-preview-${campaign.id}`;
-  wrap.appendChild(codePreview);
+  const preview = document.createElement("div");
+  preview.className = "url-preview";
+  preview.id = `dm-url-preview-${campaign.id}`;
+  wrap.appendChild(preview);
+
+  // Credential section — hidden until PROD validation confirms the invite code
+  const credSection = document.createElement("div");
+  credSection.id = `dm-cred-section-${campaign.id}`;
+  credSection.style.display = "none";
 
   const emailLabel = document.createElement("label");
   emailLabel.style.marginTop = "8px";
@@ -484,7 +490,7 @@ function buildDmExpandForm(campaign, conn, dmLink) {
   emailInput.id = `dm-email-${campaign.id}`;
   emailInput.readOnly = true;
   emailLabel.appendChild(emailInput);
-  wrap.appendChild(emailLabel);
+  credSection.appendChild(emailLabel);
 
   const pwLabel = document.createElement("label");
   pwLabel.style.marginTop = "8px";
@@ -494,12 +500,14 @@ function buildDmExpandForm(campaign, conn, dmLink) {
   pwInput.id = `dm-password-${campaign.id}`;
   pwInput.placeholder = "Your VTT-Chat password";
   pwLabel.appendChild(pwInput);
-  wrap.appendChild(pwLabel);
+  credSection.appendChild(pwLabel);
+
+  wrap.appendChild(credSection);
 
   if (dmLink) {
     const hint = document.createElement("div");
     hint.style.cssText = "font-size:10px;color:#555;margin-top:4px;";
-    hint.textContent = `✓ Linked to "${conn?.campaignName || campaign.name || "your campaign"}" — enter a new code to re-link.`;
+    hint.textContent = `✓ Linked to "${conn?.campaignName || campaign.name || "your campaign"}" — enter a new URL to re-link.`;
     wrap.appendChild(hint);
   }
 
@@ -509,38 +517,70 @@ function buildDmExpandForm(campaign, conn, dmLink) {
   launchBtn.textContent = dmLink ? "Re-link & Launch as DM" : "Link & Launch as DM";
   wrap.appendChild(launchBtn);
 
-  // Wire email pre-fill and event handlers
   setTimeout(async () => {
     const state = await getState();
     emailInput.value = state.ddbUser?.email || state.savedEmail || "";
 
-    let validatedCampaignId = null;
+    // validatedState is set after a successful invite validation on blur
+    let validatedState = null;
 
-    codeInput.addEventListener("blur", async () => {
-      const code = codeInput.value.trim();
-      if (!code) {
-        codePreview.className = "url-preview";
-        codePreview.textContent = "";
-        validatedCampaignId = null;
+    urlInput.addEventListener("blur", async () => {
+      const parsed = parseInviteUrl(urlInput.value);
+      if (!parsed) {
+        preview.className = urlInput.value.trim()
+          ? "url-preview error"
+          : "url-preview";
+        preview.textContent = urlInput.value.trim()
+          ? "Expected format: https://server/join/CODE"
+          : "";
+        credSection.style.display = "none";
+        validatedState = null;
         return;
       }
+
+      preview.className = "url-preview ok";
+      preview.textContent = `${parsed.serverUrl}  ·  Code: ${parsed.inviteCode}`;
+      await ensureServer(parsed.serverUrl);
+
       const result = await browser.runtime.sendMessage({
         type: "validate-invite-code",
-        payload: { inviteCode: code }
+        payload: { inviteCode: parsed.inviteCode }
       });
-      if (result?.ok && result.campaign?.name) {
-        codePreview.className = "url-preview ok";
-        codePreview.textContent = `Campaign: ${result.campaign.name}`;
-        validatedCampaignId = result.campaign.id;
+
+      if (!result?.ok) {
+        preview.className = "url-preview error";
+        preview.textContent = result?.error || "This code isn't valid";
+        credSection.style.display = "none";
+        validatedState = null;
+        return;
+      }
+
+      const isDevMode = result.dev?.mode === "DEV";
+      validatedState = {
+        campaignId: result.campaign?.id,
+        serverUrl: parsed.serverUrl,
+        inviteCode: parsed.inviteCode,
+        campaignName: result.campaign?.name || null,
+        devMode: isDevMode,
+        devUsername: result.dev?.dmUsername || null
+      };
+
+      if (isDevMode) {
+        preview.className = "url-preview ok";
+        preview.textContent = `Campaign: ${result.campaign?.name || parsed.inviteCode} · DEV mode`;
+        credSection.style.display = "none";
+        // Auto-link immediately in DEV — no credential form needed
+        handleDmFirstTimeLink(campaign, urlInput, pwInput, () => validatedState);
       } else {
-        codePreview.className = "url-preview error";
-        codePreview.textContent = result?.error || "This code isn't valid";
-        validatedCampaignId = null;
+        preview.className = "url-preview ok";
+        preview.textContent = `Campaign: ${result.campaign?.name || parsed.inviteCode}`;
+        credSection.style.display = "block";
+        setTimeout(() => pwInput.focus(), 50);
       }
     });
 
     launchBtn.addEventListener("click", () =>
-      handleDmFirstTimeLink(campaign, codeInput, pwInput, () => validatedCampaignId)
+      handleDmFirstTimeLink(campaign, urlInput, pwInput, () => validatedState)
     );
   }, 0);
 
@@ -765,7 +805,7 @@ function toggleDmExpand(campaignId) {
   expandedDmCampaignId = campaignId;
   byId(`dm-expand-form-${campaignId}`)?.classList.add("open");
   document.querySelector(`.char-card[data-dm-campaign-id="${campaignId}"]`)?.classList.add("selected");
-  setTimeout(() => byId(`dm-invite-code-${campaignId}`)?.focus(), 50);
+  setTimeout(() => byId(`dm-invite-url-${campaignId}`)?.focus(), 50);
 }
 
 // ---------------------------------------------------------------------------
@@ -948,16 +988,10 @@ function dmLinkInitErrorMessage(code, fallback) {
   return fallback || "Could not link your account. Please try again.";
 }
 
-async function handleDmFirstTimeLink(campaign, codeInput, pwInput, getValidatedCampaignId) {
-  const code = codeInput.value.trim();
-  if (!code) {
-    showStatus("Please enter your VTT-Chat invite code.", "error");
-    return;
-  }
-
-  const password = pwInput.value;
-  if (!password) {
-    showStatus("Please enter your VTT-Chat password.", "error");
+async function handleDmFirstTimeLink(campaign, urlInput, pwInput, getValidatedState) {
+  const parsed = parseInviteUrl(urlInput.value);
+  if (!parsed) {
+    showStatus("Please enter a valid invite URL (https://server/join/CODE).", "error");
     return;
   }
 
@@ -965,35 +999,59 @@ async function handleDmFirstTimeLink(campaign, codeInput, pwInput, getValidatedC
   if (btn) btn.disabled = true;
   showStatus("Linking your DM account…", "info");
 
-  // Use already-validated campaignId, or validate now
-  let campaignId = getValidatedCampaignId();
-  if (!campaignId) {
+  // Use already-validated state, or re-validate now (e.g. button clicked without blur)
+  let state = getValidatedState();
+  if (!state?.campaignId) {
+    await ensureServer(parsed.serverUrl);
     const validation = await browser.runtime.sendMessage({
       type: "validate-invite-code",
-      payload: { inviteCode: code }
+      payload: { inviteCode: parsed.inviteCode }
     });
     if (!validation?.ok) {
       showStatus(validation?.error || "This code isn't valid.", "error");
       if (btn) btn.disabled = false;
       return;
     }
-    campaignId = validation.campaign?.id;
+    state = {
+      campaignId: validation.campaign?.id,
+      serverUrl: parsed.serverUrl,
+      inviteCode: parsed.inviteCode,
+      campaignName: validation.campaign?.name || null,
+      devMode: validation.dev?.mode === "DEV",
+      devUsername: validation.dev?.dmUsername || null
+    };
   }
 
-  if (!campaignId) {
-    showStatus("Campaign not found. Check your invite code.", "error");
+  if (!state.campaignId) {
+    showStatus("Campaign not found. Check your invite URL.", "error");
     if (btn) btn.disabled = false;
     return;
+  }
+
+  let username, password;
+  if (state.devMode) {
+    username = state.devUsername;
+    password = `dev-${Math.random().toString(36).slice(2)}`;
+  } else {
+    const formState = await getState();
+    username = formState.ddbUser?.email || byId(`dm-email-${campaign.id}`)?.value.trim() || formState.savedEmail || "";
+    password = pwInput.value;
+    if (!password) {
+      showStatus("Please enter your VTT-Chat password.", "error");
+      if (btn) btn.disabled = false;
+      return;
+    }
   }
 
   const result = await browser.runtime.sendMessage({
     type: "dm-link-init",
     payload: {
-      inviteCode: code,
-      campaignId,
+      inviteCode: parsed.inviteCode,
+      campaignId: state.campaignId,
+      username,
       password,
       externalCampaignId: String(campaign.id),
-      campaignName: campaign.name || ""
+      campaignName: campaign.name || state.campaignName || ""
     }
   });
 
