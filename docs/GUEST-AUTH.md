@@ -1,0 +1,979 @@
+# Guest Mode & Extension Authentication
+
+_How the browser extension enables low-friction, invite-link-based onboarding by delegating identity and character validation to third-party VTT systems._
+
+**Related docs:**
+
+- [EXTENSION-INTEGRATION.md](EXTENSION-INTEGRATION.md) — extension architecture and communication
+- [THIRD-PARTY-INTEGRATIONS.md](THIRD-PARTY-INTEGRATIONS.md) — supported systems and admin authorization
+- [EXTENSION-UX.md](EXTENSION-UX.md) — overlay UX and role-aware UI
+- [../architecture/DATA-MODEL.md](../architecture/DATA-MODEL.md) — data schema for external identities
+
+**Extension repository:** <https://github.com/AndyProsser/vtt-chat-extension> (D&D Beyond front-end and scraping layer — integration with vtt-chat backend is defined by this document)
+
+---
+
+## Overview
+
+VTT-Chat supports two distinct invite access paths. Only one path creates guest accounts.
+
+### Player Guest Path (extension-required)
+
+The DM generates a per-campaign **player invite link**. Players visit that link while running the browser extension on a supported VTT (e.g. D&D Beyond). The third-party system has already authenticated the user and validated their character. The extension scrapes that validated data and hands it to the vtt-chat backend, which matches or creates a guest account and issues a session token.
+
+This is a deliberate trust delegation model:
+
+> "D&D Beyond has already verified that this email address owns this character in this campaign. vtt-chat trusts that assertion to skip its own registration flow."
+
+The DM flow is **separate and distinct** from the player guest flow. DMs must hold a full vtt-chat account — the campaign is created in vtt-chat first, and the player invite code is then used in the extension popup to link the DDB campaign to the vtt-chat campaign. DMs are identified by the extension detecting that the logged-in DDB user owns the campaign, and they authenticate via password login, not guest bypass. See [DM-LINK.md](DM-LINK.md) for the complete DM identity and campaign linking specification.
+
+**The first player to connect bootstraps the campaign character stubs** from the DM's prior campaign sync. If the DM has already run a DM sync (§5f of EXTENSION-INTEGRATION.md), stub records exist for all party members; players adopt those stubs on first login. If no DM sync has run, the first player connection creates data structures as normal.
+
+The DM must hold a **full vtt-chat account** to generate spectator invite links, access the admin console, or run the DM campaign sync.
+
+**Guest players are campaign-scoped.** A guest player account cannot browse or join other campaigns independently. Each additional campaign requires a separate extension-based authentication.
+
+### Spectator Watch Path (no extension required)
+
+The DM generates a separate **spectator invite link**. Spectators open this link in a browser — no extension required. The invite page shows campaign details, active character roster with connection status, and current session status. Spectators can either authenticate with a full account or create a temporary guest spectator account for watch-session access.
+
+Full-account users can also find and join campaigns that advertise themselves as open to spectators via the campaign browse page — no invite link required for that path.
+
+The DM has ultimate authority over spectator access: whether spectators are permitted, what account types are allowed, how many can be present simultaneously, and whether a waitlist is maintained.
+
+Campaign visibility is independent from session state. Campaign cards are shown based on campaign privacy and access rules; session lifecycle only affects launch/watch actions and history availability.
+
+### Current validation status (2026-05)
+
+Core guest/spectator runtime validation is complete in the main repository:
+
+- Backend guest and spectator API paths are covered for success/error/authz boundaries, including waitlist status transitions.
+- External integration sync-policy and campaign external-link authorization boundaries are regression-tested.
+- Frontend join/watch/browse and guest-upgrade auth transition paths are covered by deterministic component/integration tests.
+- Multi-step backend integration tests now validate invite/preflight/guest-login and spectator waitlist-to-promotion journeys.
+
+Extension-specific bridge milestones remain tracked and executed in the extension repository roadmap.
+
+---
+
+## 1. Trust Model
+
+### 1.1 Why External Auth Is Trusted
+
+Third-party platforms (D&D Beyond, Roll20, Foundry VTT) enforce their own account validation. Specifically:
+
+- A D&D Beyond user must own or be invited to a campaign to appear on its character roster.
+- Character-to-campaign membership is validated by the external platform.
+- The scraped email address is the same address the user registered with on the external platform.
+
+vtt-chat treats the combination of `(externalSystem, externalUserId, email)` as sufficient to issue a guest token, subject to the invite link being valid.
+
+### 1.2 Scope of Trust
+
+| What is trusted                                   | What is NOT trusted                                       |
+| ------------------------------------------------- | --------------------------------------------------------- |
+| Email from external profile                       | Email supplied manually by the user                       |
+| Character membership in campaign (by externalId)  | Campaign data that doesn't match the invite code          |
+| DM status from external campaign owner field      | Role escalation beyond what the external system indicates |
+| Avatar URL and display name from external profile | Arbitrary metadata injected by the extension              |
+
+### 1.3 Canonical Relationship Model
+
+- Campaign participation is modeled as `User -> CampaignMembership(role) -> Character`.
+- A campaign membership has one active role (`DM`, `PLAYER`, or `SPECTATOR`) at a time.
+- Player memberships have one active character per campaign. Character replacement is allowed.
+- Chat/history records retain send-time character snapshot fields so old messages keep the original character identity.
+- Spectator memberships do not own characters.
+
+---
+
+## 2. Invite Links and Spectator Access
+
+There are two distinct invite link types. They are generated separately, have different flows, and serve different roles.
+
+### 2.1 Player Invite Links (Extension Required)
+
+Player invite links require the browser extension (or equivalent VTT integration) to authenticate.
+
+- Player invite links can be generated by a **full-account DM or a sysadmin**. The invite is **campaign-scoped** and applies to all extension-joining users — both players and the DM.
+- One active player invite code per campaign.
+- Codes are opaque random strings (minimum 24 characters, URL-safe).
+- The invite carries **no role information**. The DM role is inferred from the external system's campaign ownership data supplied in the extension data packet at join time.
+- Invite codes can be **revoked and reissued** by a DM (any account type, once joined) or a sysadmin. Revoking prevents new connections; existing sessions continue until their token expires naturally.
+
+```text
+https://<platform>/join/<inviteCode>
+https://<platform>/join/<inviteCode>?source=dndbeyond
+```
+
+The extension pre-flight validates this code before attempting guest login (see Section 3).
+
+---
+
+### 2.2 Spectator Invite Links (No Extension Required)
+
+Spectator invite links open a browser page — no extension installation required.
+
+- Only full-account DMs can generate spectator invite links.
+- One active spectator invite code per campaign (separate from the player invite code).
+- The spectator invite page shows: campaign name, DM display name, active character roster with connection status, and current session status (in session / between sessions).
+- The user may authenticate with a full account or create a temporary guest spectator account.
+- Spectators **cannot access the green room**. Spectator sessions are only active during a live session. Spectators who connect between sessions see the status page only.
+
+```text
+https://<platform>/watch/<spectatorInviteCode>
+```
+
+Response from the invite validation endpoint:
+
+```json
+{
+  "valid": true,
+  "type": "spectator",
+  "campaign": {
+    "name": "The Lost Mines",
+    "dmDisplayName": "Gandalf",
+    "sessionActive": true,
+    "spectatorSlotsFilled": 2,
+    "spectatorSlotsMax": 5,
+    "spectatorWaitlistEnabled": true,
+    "waitlistPosition": null
+  },
+  "characters": [
+    {
+      "name": "Aragorn",
+      "class": "Ranger",
+      "level": 5,
+      "avatarUrl": "https://ddb.ac/avatars/char.png",
+      "online": true
+    },
+    {
+      "name": "Gandalf",
+      "class": "Wizard",
+      "level": 20,
+      "avatarUrl": "https://ddb.ac/avatars/char2.png",
+      "online": false
+    }
+  ]
+}
+```
+
+If capacity is reached, the response indicates the waitlist position. The user can opt into the waitlist and will be auto-promoted (first-come-first-served) when a slot opens due to a spectator disconnecting (after the reconnect grace period expires).
+
+---
+
+### 2.3 Spectator Access Controls (DM-Controlled)
+
+The DM sets spectator policy per campaign from Campaign Settings:
+
+| Setting  | Label                  | Who can spectate                                                               |
+| -------- | ---------------------- | ------------------------------------------------------------------------------ |
+| `NONE`   | No spectators          | Spectators are disabled. Campaign still appears in browse (marked as private). |
+| `GUESTS` | Guests & full accounts | Anyone with a spectator invite can spectate (subject to capacity/waitlist).    |
+| `USERS`  | Full accounts only     | Only users with full vtt-chat accounts can spectate.                           |
+
+Additional controls:
+
+- **Max spectators**: integer (null = platform default). Sysadmins set the platform default and a hard maximum that DMs cannot exceed.
+- **Waitlist**: enabled/disabled per campaign. When enabled and at capacity, new spectators join a waitlist and are auto-promoted when a slot opens.
+- **Reconnect grace period**: a disconnected spectator retains their slot for a configurable grace period (sysadmin-controlled default) before being removed and triggering a waitlist promotion.
+- **Discoverable**: boolean. When true and `spectatorPolicy != NONE`, the campaign appears in the public campaign browse list for full-account users.
+- **Session grandfathering rule**: if spectators are disabled mid-session, already-connected spectators keep access until that session ends. New sessions block spectator entry until spectators are re-enabled.
+
+---
+
+### 2.4 Campaign Browse (Full Account Users)
+
+Full-account users can browse campaigns that are visible by campaign privacy/access rules. This does not require an invite link.
+
+Campaigns with `spectatorPolicy = NONE` or `discoverable = false` appear in browse results as **private** (name shown, no join option).
+
+```text
+GET /api/campaigns/browse
+```
+
+Response includes:
+
+- Campaign name, DM display name
+- Session status (active / between sessions) for launch/watch context only
+- Spectator slot count and availability
+- Whether the campaign is private (join button disabled)
+
+Guest player accounts cannot access the campaign browse page — they are scoped to their campaign and can only join via extension.
+
+---
+
+### 2.5 Player Invite Code Validation (Pre-flight)
+
+Before attempting a player guest login, the extension validates the invite:
+
+```text
+GET /api/campaigns/invite/:code/validate
+```
+
+Response:
+
+```json
+{
+  "valid": true,
+  "type": "player",
+  "campaign": {
+    "name": "The Lost Mines",
+    "dmDisplayName": "Gandalf"
+  },
+  "platformStatus": {
+    "online": true,
+    "activeUsers": 12,
+    "activeCampaigns": 3
+  }
+}
+```
+
+If the code is expired or not found:
+
+```json
+{
+  "valid": false,
+  "reason": "INVITE_EXPIRED"
+}
+```
+
+---
+
+## 3. Pre-flight Validation (Player / Extension Path)
+
+The pre-flight sequence below applies to the **player invite path** (extension-required). The spectator path has its own simpler flow — see Section 4.6 and 4.7.
+
+Before presenting a join UI or requesting a token, the extension performs a pre-flight check sequence. This runs in the background script immediately after the user activates the extension on a supported page.
+
+### 3.1 Pre-flight Steps
+
+**Returning user (device credential stored):**
+
+```text
+1. GET /api/platform/status
+2. POST /api/auth/extension/credential/exchange { credential, deviceId }
+     → Success: fresh JWT obtained — skip to launch (no invite code needed)
+     → CREDENTIAL_EXPIRED_FULL: prompt for password only (no invite code)
+     → CREDENTIAL_INVALID / CREDENTIAL_EXPIRED_GUEST: fall back to first-time flow below
+```
+
+**First-time user (no device credential):**
+
+```text
+1. GET /api/platform/status          — Is the platform online?
+2. GET /api/campaigns/invite/:code/validate  — Is the invite valid?
+3. POST /api/auth/extension/preflight        — Does a vtt-chat account exist for this email?
+```
+
+Steps 1 and 2 are unauthenticated. Step 3 submits the scraped email address (and external system identifier) to check account status without issuing a token. After a successful first-time login, the `deviceCredential` returned in the response must be stored in `localStorage` so future launches use the returning-user path above.
+
+### 3.2 Platform Status Endpoint
+
+```text
+GET /api/platform/status
+```
+
+Returns a public status snapshot used by the extension popup for display to users before they join.
+
+Response:
+
+```json
+{
+  "online": true,
+  "version": "1.4.0",
+  "activeUsers": 24,
+  "activeCampaigns": 5,
+  "activeSessions": 2,
+  "maintenanceMode": false
+}
+```
+
+### 3.3 Account Pre-check Endpoint
+
+```text
+POST /api/auth/extension/preflight
+```
+
+Legacy body shape (deprecated compatibility):
+
+```json
+{
+  "email": "player@example.com",
+  "externalSystem": "dndbeyond",
+  "externalUserId": "ddb-user-12345",
+  "inviteCode": "abc123..."
+}
+```
+
+Response variants:
+
+```json
+// No vtt-chat account — guest flow proceeds automatically
+{
+  "accountStatus": "none",
+  "suggestedFlow": "guest"
+}
+
+// Existing guest account — auto-login will occur
+{
+  "accountStatus": "guest",
+  "suggestedFlow": "auto-login"
+}
+
+// Full account exists — user must authenticate
+{
+  "accountStatus": "full",
+  "suggestedFlow": "authenticate",
+  "loginHint": "player@example.com"
+}
+
+// Full account, already logged in (token in extension memory)
+{
+  "accountStatus": "full",
+  "suggestedFlow": "already-authenticated"
+}
+```
+
+The pre-check does not expose whether or not the email is registered beyond these four cases. It does not return user IDs or tokens.
+
+### 3.4 Pre-flight UI Outcome
+
+Based on the pre-flight results, the extension popup presents one of:
+
+| Outcome                      | UI presented                                                |
+| ---------------------------- | ----------------------------------------------------------- |
+| Platform offline             | "VTT-Chat is currently unreachable."                        |
+| Invite invalid               | "This invite link is no longer valid."                      |
+| Platform online, no account  | "Welcome! You'll join as a guest using your [DDB] account." |
+| Existing guest account       | "Welcome back! Joining as [display name]."                  |
+| Full account (not logged in) | "You have a VTT-Chat account. Please log in to continue."   |
+| Full account (logged in)     | "Joining as [display name]."                                |
+
+---
+
+## 4. Authentication Flows
+
+### 4.1 New Guest (No Existing Account)
+
+```text
+Extension scrapes identity from DDB
+  → pre-flight: accountStatus = "none"
+  → POST /api/auth/extension/guest-login
+  → backend creates guest User record (authType = GUEST)
+  → backend creates ExternalIdentity linked to user
+  → backend matches or creates Character + CampaignMembership
+  → JWT issued (guest token, short expiry, renewable)
+  → extension stores token in memory
+  → SPA opens, token injected via query param or postMessage
+```
+
+### 4.2 Returning Guest (Existing Guest Account)
+
+```text
+Extension scrapes identity from DDB
+  → pre-flight: accountStatus = "guest"
+  → POST /api/auth/extension/guest-login (same endpoint)
+  → backend finds existing user by (email + externalSystem)
+  → backend updates user profile fields from scraped data (if sync policy allows)
+  → backend updates character fields from scraped data (if sync policy allows)
+  → JWT issued
+```
+
+### 4.3 Existing Full Account (Not Logged In)
+
+```text
+Extension scrapes identity from DDB
+  → pre-flight: accountStatus = "full"
+  → extension popup shows login form (email pre-filled)
+  → user enters password
+  → POST /api/auth/login (standard auth endpoint)
+  → on success: campaign membership created if not already present
+  → JWT issued
+```
+
+### 4.4 Existing Full Account (Already Logged In)
+
+```text
+Extension has valid JWT in memory
+  → pre-flight: accountStatus = "full", suggestedFlow = "already-authenticated"
+  → POST /api/campaigns/invite/:code/join (authenticated)
+  → campaign membership created if not already present
+  → existing session resumes or new session context set
+```
+
+### 4.5 Campaign Bootstrap (First User Connects)
+
+The first user to join a campaign via the player invite — whether a player or the DM — bootstraps the campaign's data structures. The extension sends a **campaign data packet** alongside the individual's identity data.
+
+The campaign data packet contains:
+
+- External DM ID (used to determine who holds the DM role)
+- List of all campaign members: external user IDs, display names, and basic character info (name, class, level, external character ID) as known to the external system at that moment
+- External campaign ID and campaign name
+
+On receiving the first connection for a campaign:
+
+1. Backend creates the Campaign record (linked to the external campaign via `CampaignExternalLink`).
+2. Backend creates stub records for all members listed in the packet (User stubs, Character stubs, CampaignMembership records).
+3. The connecting user's stub is promoted to a full session participant — their token is issued.
+4. **Role is assigned**: if the connecting user's external ID matches the DM ID in the packet, they receive the DM table role; otherwise they receive the Player role.
+
+When subsequent users connect:
+
+- Their stub record already exists; the backend updates it with the live extension data.
+- Their role is assigned by the same rule (external user ID vs DM ID in the packet).
+- Character and campaign data is updated per the campaign's `extensionSyncPolicy`.
+
+When the DM connects (if not the first user):
+
+- They receive the DM table role automatically.
+- Session controls (start/stop/pause) become available immediately.
+- No manual handoff or re-join is required.
+
+---
+
+### 4.6 Spectator Watch Join (Via Spectator Invite Link)
+
+No extension required.
+
+```text
+User opens https://<platform>/watch/<spectatorInviteCode>
+  → browser loads the spectator invite page
+  → page shows: campaign info, character roster + connection status, session status, slot availability
+  → if spectatorPolicy = USERS: redirect to standard login
+  → if spectatorPolicy = NONE: show "Spectators not enabled" message
+  → if at capacity and waitlist disabled: show "Session full" message
+  → if at capacity and waitlist enabled: offer waitlist opt-in
+  → if unauthenticated: user may continue as guest spectator or log in/register
+  → if guest path selected: POST /api/auth/spectator/guest-join
+  → backend creates guest spectator user + spectator campaign membership
+  → if slot available: token issued, user enters session view
+  → if on waitlist: polling/push notification; promoted automatically when slot opens
+  → on promotion: token issued, user enters session view
+```
+
+Spectator guest endpoint:
+
+```text
+POST /api/auth/spectator/guest-join
+```
+
+This endpoint is the canonical guest spectator onboarding path for direct watch links.
+
+Body:
+
+```json
+{
+  "spectatorInviteCode": "xyz789...",
+  "displayName": "DragonFan42",
+  "email": "fan@example.com"
+}
+```
+
+Legacy response (slot available):
+
+```json
+{
+  "token": "jwt-spectator-token",
+  "user": { "id": "uuid", "displayName": "DragonFan42", "authType": "GUEST" },
+  "campaignId": "uuid",
+  "status": "active"
+}
+```
+
+Legacy response (waitlisted):
+
+```json
+{
+  "token": null,
+  "campaignId": "uuid",
+  "status": "waitlisted",
+  "waitlistPosition": 3,
+  "waitlistToken": "opaque-poll-token"
+}
+```
+
+The `waitlistToken` is used to poll `GET /api/campaigns/:id/spectator/waitlist-status` until promoted.
+
+---
+
+### 4.7 Full Account Spectator
+
+Full-account users may spectate via invite link or via the campaign browse page.
+
+**Via invite link:**
+
+```text
+User opens https://<platform>/watch/<spectatorInviteCode>
+  → if already logged in: proceed to slot check → enter session view
+  → if not logged in: login prompt → on success: slot check → enter session view
+```
+
+**Via campaign browse:**
+
+```text
+Full-account user navigates to /browse
+  → lists active discoverable campaigns with spectator slots
+  → user clicks a campaign
+  → slot check: if available → enter session view
+  → if at capacity + waitlist enabled → offer waitlist
+  → if spectatorPolicy = USERS: proceed
+  → if spectatorPolicy = GUESTS: proceed
+  → if spectatorPolicy = NONE: campaign shown as private, no join option
+```
+
+Full-account spectators are subject to the same max-slot and waitlist rules as guest spectators.
+
+---
+
+### 4.8 Spectator Session Constraints
+
+Regardless of account type:
+
+- Spectators **cannot access the green room**.
+- Spectators cannot send chat messages, whispers, or notes.
+- Spectators can adjust local audio mix only (client-local), and cannot change room/global audio state.
+- Spectators can see the character roster, presence indicators, and in-session chat (read-only).
+- Private chats are always hidden from spectators.
+- If the session ends, the spectator view shows a "Session ended" state and the spectator's slot is released.
+- A disconnected spectator retains their slot for the reconnect grace period (sysadmin-controlled, default recommended: 60 seconds). After expiry the slot is released and the next waitlist entry is promoted.
+
+---
+
+### 4.9 Guest Login Endpoint (Player / DM)
+
+```text
+POST /api/auth/extension/guest-login
+```
+
+Used by both players and DMs. Role is determined server-side from the `campaignPacket.dmExternalUserId` field.
+
+Policy lock note (2026-05-04): DM/Player guest access is granted only through this extension POST invite flow. Resulting guest access is campaign-scoped and can later be upgraded to a full account. Outside extension launch, DM/Player guest access is not granted.
+
+Body:
+
+```json
+{
+  "inviteCode": "abc123...",
+  "externalSystem": "dndbeyond",
+  "externalUserId": "ddb-user-12345",
+  "email": "player@example.com",
+  "displayName": "Aragorn's Player",
+  "avatarUrl": "https://ddb.ac/avatars/player.png",
+  "character": {
+    "name": "Aragorn",
+    "race": "Human",
+    "class": "Ranger",
+    "subclass": "Hunter",
+    "level": 5,
+    "externalCharacterId": "ddb-char-67890",
+    "characterUrl": "https://www.dndbeyond.com/characters/67890",
+    "avatarUrl": "https://ddb.ac/avatars/char.png"
+  },
+  "campaignPacket": {
+    "externalCampaignId": "ddb-campaign-11111",
+    "campaignName": "The Lost Mines of Phandelver",
+    "dmExternalUserId": "ddb-user-99999",
+    "members": [
+      {
+        "externalUserId": "ddb-user-12345",
+        "displayName": "Aragorn's Player",
+        "avatarUrl": "https://ddb.ac/avatars/player.png",
+        "character": {
+          "externalCharacterId": "ddb-char-67890",
+          "name": "Aragorn",
+          "class": "Ranger",
+          "level": 5,
+          "avatarUrl": "https://ddb.ac/avatars/char.png"
+        }
+      },
+      {
+        "externalUserId": "ddb-user-22222",
+        "displayName": "Legolas's Player",
+        "avatarUrl": "https://ddb.ac/avatars/player2.png",
+        "character": {
+          "externalCharacterId": "ddb-char-33333",
+          "name": "Legolas",
+          "class": "Fighter",
+          "level": 5,
+          "avatarUrl": "https://ddb.ac/avatars/char2.png"
+        }
+      }
+    ]
+  }
+}
+```
+
+The `campaignPacket` field is required on the **first connection** for a campaign (when no `CampaignExternalLink` exists for the invite code's campaign). On subsequent connections it is optional; if provided, it is used to update stubs per the `extensionSyncPolicy`.
+
+Response:
+
+```json
+{
+  "token": "jwt-guest-token",
+  "user": {
+    "id": "uuid",
+    "displayName": "Aragorn's Player",
+    "avatarUrl": "https://ddb.ac/avatars/player.png",
+    "authType": "GUEST",
+    "campaignId": "uuid",
+    "role": "Player"
+  },
+  "character": {
+    "id": "uuid",
+    "name": "Aragorn",
+    "avatarUrl": "https://ddb.ac/avatars/char.png"
+  },
+  "campaignBootstrapped": false,
+  "deviceCredential": {
+    "credential": "opaque-base64url-string",
+    "deviceId": "uuid-sent-in-request"
+  }
+}
+```
+
+`role` is `"DM"` or `"Player"` as determined by the server. `campaignBootstrapped` is `true` only when this connection created the campaign data structures for the first time.
+
+`deviceCredential` is present only when the request included a `deviceId`. The extension must store it in `localStorage` keyed by `player:<externalCampaignId>:<externalSystem>` alongside the vtt-chat `campaignId` from `user.campaignId`. See [DEVICE-CREDENTIALS.md](DEVICE-CREDENTIALS.md) for the full storage contract and reconnect flows.
+
+### 4.10 Returning User via Device Credential
+
+The normal path for any user who has previously joined a campaign via the extension. No invite code is needed; the stored `deviceCredential` is the sole reconnection mechanism.
+
+```text
+Extension holds deviceCredential in localStorage
+  → POST /api/auth/extension/credential/exchange { credential, deviceId }
+  → Backend validates credential, returns { token, credential } (credential is rotated)
+  → Extension stores the new credential immediately (old one is now invalid)
+  → POST /api/campaigns/:campaignId/session/ensure
+       → if no IDLE session exists: creates one (any campaign member may do this, including guests)
+       → if any session exists (IDLE, ACTIVE, PAUSED, COOLDOWN): returns it unchanged
+       → returns { sessionId, sessionState, campaignDisplayState }
+  → Branch by account type:
+       GUEST → open /ext-launch?campaignId=<uuid>&token=<jwt>&sessionId=<id>
+               (auto-login, no password prompt)
+       FULL (JWT valid in memory) → open /ext-launch?campaignId=<uuid>&token=<jwt>&sessionId=<id>
+               (auto-login, no password prompt)
+       FULL (JWT absent or expired) → open /ext-launch?campaignId=<uuid>&sessionId=<id>&hint=<email>
+               (single password field shown; email pre-filled and read-only)
+```
+
+**GREENROOM session creation by non-DM users:**
+
+`POST /api/campaigns/:campaignId/session/ensure` accepts any valid extension-credential JWT, regardless of the caller's campaign role. If no session exists for the campaign, the backend creates one in the `IDLE` state. This is the only case where a player or guest may create a session — DM session controls (`ACTIVE`, `PAUSED`, etc.) still require the DM role. The DM may start the session normally once connected; players enter the GREENROOM until then.
+
+---
+
+## 5. External Identity Tracking
+
+### 5.1 ExternalIdentity Record
+
+Every user authenticated via an external system has an `ExternalIdentity` record:
+
+```text
+ExternalIdentity
+  id              — internal UUID
+  userId          — FK to User
+  externalSystem  — enum: DNDBEYOND | ROLL20 | FOUNDRY | ...
+  externalUserId  — string (system-specific user identifier)
+  email           — string (scraped from external profile)
+  lastSeenAt      — timestamp
+  createdAt       — timestamp
+```
+
+One user may have multiple `ExternalIdentity` records (one per system they've connected through). The `email` is the linking key — if the same email address appears from a different external system, it resolves to the same vtt-chat user.
+
+### 5.2 Character External IDs
+
+Characters may be associated with an external character record:
+
+```text
+Character
+  ...
+  externalSystem    — enum (nullable)
+  externalId        — string (nullable)
+  characterUrl      — string (nullable)
+```
+
+When a character is created or updated via the extension, these fields are populated. They are used to:
+
+- Detect updates when the same character reconnects in a later session.
+- Prevent duplicate character records for the same external character.
+
+### 5.3 Campaign External IDs
+
+A campaign may be linked to a campaign on an external system:
+
+```text
+CampaignExternalLink
+  id              — internal UUID
+  campaignId      — FK to Campaign
+  externalSystem  — enum
+  externalId      — string (e.g. DDB campaign ID)
+  linkedAt        — timestamp
+  linkedBy        — FK to User (who linked it, must be DM)
+```
+
+Multiple campaigns on the platform can link to the same external campaign (e.g. one DDB campaign might have a staging and a live vtt-chat campaign). However, within a single vtt-chat campaign, each external system may only have one active link at a time.
+
+---
+
+## 6. Data Sync and Override Policy
+
+The DM controls whether data pushed from the extension can override campaign information.
+
+### 6.1 Sync Policy Options
+
+| Setting          | Label        | Behavior                                                                              |
+| ---------------- | ------------ | ------------------------------------------------------------------------------------- |
+| `NONE`           | No Updates   | Extension data is used for initial setup only. No updates after first login.          |
+| `DM_ONLY`        | DM-only      | Only data pushed by the DM's extension session can update campaign/character records. |
+| `DM_AND_PLAYERS` | DM & Players | Any connected user's extension data may trigger updates.                              |
+
+The policy is stored per campaign:
+
+```text
+Campaign
+  extensionSyncPolicy  — enum: NONE | DM_ONLY | DM_AND_PLAYERS
+```
+
+Default: `DM_ONLY`.
+
+### 6.2 What Can Be Synced
+
+| Data field                     | Can be synced                  |
+| ------------------------------ | ------------------------------ |
+| User display name              | Yes (always, user owns this)   |
+| User avatar                    | Yes (always, user owns this)   |
+| Character name                 | Per sync policy                |
+| Character class / race / level | Per sync policy                |
+| Character avatar               | Per sync policy                |
+| Campaign name                  | DM-only (regardless of policy) |
+| Campaign player list           | DM-only (regardless of policy) |
+
+DM-level campaign data (name, structure) can only be updated when the push comes from a user with DM membership in the campaign, regardless of the extensionSyncPolicy.
+
+### 6.3 Sync Update Endpoint
+
+```text
+POST /api/integrations/external/sync
+```
+
+Requires authentication (guest or full token). Validates the caller's campaign membership and role before applying any updates.
+
+Body:
+
+```json
+{
+  "campaignId": "uuid",
+  "externalSystem": "dndbeyond",
+  "source": "player",
+  "characterUpdate": {
+    "externalCharacterId": "ddb-char-67890",
+    "level": 6,
+    "class": "Ranger",
+    "subclass": "Gloom Stalker"
+  },
+  "campaignUpdate": null
+}
+```
+
+The server applies the update only if the sync policy permits it for the caller's role.
+
+---
+
+## 7. Account Upgrade (Guest → Full)
+
+### 7.1 UI Prompt
+
+Guest users are shown a persistent but dismissible upgrade prompt in the platform UI. This is rendered as an info banner in the app header and optionally in the user profile panel.
+
+The prompt is not shown during active session play to avoid disruption.
+
+### 7.2 Upgrade Flow (Player or DM Guest)
+
+```text
+Guest user clicks "Upgrade to full account"
+  → UI presents email (pre-filled, read-only) and password fields
+  → POST /api/auth/upgrade
+  → backend validates email matches guest account
+  → backend sets authType = FULL, stores passwordHash
+  → JWT reissued with full account claims
+  → guest token invalidated
+```
+
+Endpoint:
+
+```text
+POST /api/auth/upgrade
+```
+
+Requires valid guest token.
+
+Body:
+
+```json
+{
+  "password": "new-secure-password"
+}
+```
+
+Response: new JWT + updated user record.
+
+### 7.3 Spectator → Player / DM Account Transition
+
+Spectators are not extension users. A spectator (guest or full account) who later uses a valid player invite in the extension can transition to player access when the account identity can be safely linked.
+
+**Path A — Full-account spectator uses player invite:**
+
+```text
+Spectator opens a player invite link in the extension
+  → extension runs preflight and guest-login flow as normal
+  → backend finds existing authenticated user context
+  → campaign membership role changes from SPECTATOR to PLAYER (or DM if external ownership matches)
+  → transition is immediate and launch proceeds
+```
+
+**Path B — Guest spectator upgrades through extension player invite:**
+
+```text
+Guest spectator opens player invite in extension
+  → backend links by safe email/system match rules
+  → campaign membership role is set to PLAYER (or DM if external ownership matches)
+  → launch proceeds without extra registration prompts
+```
+
+In both paths the user's vtt-chat UUID is preserved and campaign/session history is retained.
+
+### 7.4 Data Continuity
+
+All campaign memberships, characters, chat history, notes, and session history are preserved across the upgrade. The user's vtt-chat UUID does not change.
+
+---
+
+## 8. Security Considerations
+
+### 8.1 Guest Token Scope
+
+Guest JWTs carry:
+
+- `authType: GUEST`
+- A reduced token lifetime (e.g. 24 hours vs 30 days for full accounts)
+- Renewable via the extension while the extension is active (silent renewal, no prompt)
+
+Guest tokens are subject to the same WS:AUTH validation as full tokens.
+
+### 8.2 Email Trust Boundary
+
+The platform trusts the scraped email address only within the context of a valid invite code and an authorized external system. If:
+
+- The invite code is invalid → request rejected.
+- The external system is not authorized → request rejected.
+- The email does not match an existing account on extension POST guest-login → guest account created (not merged with any existing full account without explicit user confirmation).
+
+### 8.3 No Credential Exposure
+
+Guest login does not expose passwords. Guest accounts do not have passwords. The extension never transmits vtt-chat credentials; it only transmits data scraped from the external platform.
+
+### 8.4 Token Storage
+
+**JWT (short-lived session token):** stored in background script memory only. It is never written to `localStorage`, `sessionStorage`, `chrome.storage`, or cookies. It is lost when the browser is closed or the extension is unloaded.
+
+**Device credential (long-lived reconnect token):** stored in `localStorage`. It survives browser restarts and is the sole mechanism for reconnecting without re-entering an invite code. See [DEVICE-CREDENTIALS.md](DEVICE-CREDENTIALS.md) for the full storage key convention and exchange flow.
+
+This two-tier model means invite codes are used once and discarded; the extension does not store them.
+
+---
+
+## 9. DM Workflow
+
+### 9.1 DM Account Requirement
+
+**DMs must hold a full vtt-chat account.** The campaign is created in vtt-chat before the extension is involved, so the DM necessarily has a full account by the time they need to link via the extension.
+
+The extension launch path for DMs is separate from the player guest path — it requires a full account password login and uses `POST /api/auth/extension/dm-link` to bind the DM's DDB identity to their vtt-chat account. Guest tokens are rejected by that endpoint and by `POST /api/integrations/external/dm-sync`.
+
+> Full specification of the DM identity and campaign linking flow, including guest account merge and the extension changes required, is in **[DM-LINK.md](DM-LINK.md)**.
+
+The player guest path (`POST /api/auth/extension/guest-login`) remains unchanged and is **players only**. The extension must never route a detected DM through the guest-login endpoint.
+
+### 9.2 Generating a Player Invite Link
+
+Player invite codes cover both players and the DM — no separate DM invite is needed. Players connect as guests; the DM connects via the full-account DM link flow (see [DM-LINK.md §4](DM-LINK.md)).
+
+**To generate a player invite (via the vtt-chat UI):**
+
+1. A full-account DM or sysadmin creates the campaign (or opens an existing one) in vtt-chat.
+2. Navigate to Campaign Settings → Invites → Player Invite.
+3. Click "Generate Player Invite Link".
+4. Share the code with players (e.g. paste in Discord or on the DDB campaign page).
+5. Share the same code with yourself (the DM) — you will enter it in the extension popup on the DDB campaign page to establish the campaign link.
+6. Players connect as guests via the existing guest-login flow. The DM connects via the DM link flow using the same invite code.
+
+**Sysadmin-issued invite (alternative flow):**
+
+1. Sysadmin creates the campaign record and generates the player invite code from the admin panel.
+2. Invite code is shared with the DM and players.
+3. The first person to connect bootstraps the campaign data structures (see Section 4.5).
+
+**Revoke and reissue:**
+
+- A DM (any account type) or sysadmin may revoke and reissue the player invite code at any time.
+- Revoking prevents new connections; the extension will fail to authenticate with the revoked code.
+- Reissuing generates a new code; the old code is invalidated immediately.
+- One active player invite code per campaign.
+
+### 9.3 Generating a Spectator Invite Link
+
+1. Navigate to Campaign Settings → Invites → Spectator Invite.
+2. Ensure `spectatorPolicy` is not `NONE`.
+3. Click "Generate Spectator Invite Link".
+4. Share with spectators — no extension required. Clicking the link opens the spectator invite page.
+
+- One active spectator invite code per campaign.
+- DM may regenerate or disable at any time.
+- If `spectatorPolicy = USERS`, the invite page will require the visitor to log in with a full account.
+- If `spectatorPolicy = NONE`, the invite link will show a "Spectators not enabled" message.
+
+### 9.4 Spectator Access Controls
+
+From Campaign Settings → Spectators:
+
+| Control          | Options                                                       |
+| ---------------- | ------------------------------------------------------------- |
+| Who can spectate | None / Guests & Full Accounts / Full Accounts Only            |
+| Max spectators   | Integer (1–[sysadmin max], or platform default if left blank) |
+| Waitlist         | Enabled / Disabled                                            |
+| Discoverable     | Yes / No (whether campaign appears in the browse list)        |
+
+Changing `spectatorPolicy` to `NONE` blocks new spectator joins immediately. Spectators already connected in the current session remain until that session ends.
+Reducing `spectatorMax` below the current active count drops the most recently joined spectators first.
+
+### 9.4.1 Screened Late-Join Handling (Players)
+
+When campaign late-join mode is `SCREENED`:
+
+- Brand-new player joins are allowed only during the configured grace window after session start.
+- After the grace window expires, the join API rejects new player joins with a DM-screening message.
+- DMs and previously joined reconnecting players continue to bypass the late-join gate.
+- A dedicated pending late-join screening queue is not part of the current Phase 1 implementation.
+
+### 9.5 Invite Link Lifecycle
+
+- Player and spectator invite codes are separate and managed independently.
+- **Player invite codes** can be revoked and reissued by a DM (any account type) or a sysadmin.
+- **Spectator invite codes** can only be generated and managed by a full-account DM.
+- Revoking an invite (setting `active = false`) prevents new joins but does not drop existing members.
+- When a code is reissued, the previous code is invalidated immediately. Extensions holding the old code will fail token renewal and the user will need to reconnect with the new link.
+- A sysadmin can revoke either invite type for any campaign.
+
+### 9.6 Monitoring Linked Identities and Spectators
+
+Campaign Settings shows the DM:
+
+- Which external systems are linked to the campaign.
+- Which users joined via extension vs. standard registration vs. spectator invite.
+- Current extensionSyncPolicy and controls to change it.
+- List of external identities per member.
+- Active spectator list with slot count, connection status, and waitlist queue.

@@ -917,7 +917,8 @@ async function handleDmJoinLaunch(campaign, urlInput) {
       email,
       externalUserId: String(state.ddbUser.id),
       externalCampaignId: String(campaign.id),
-      campaignName: campaign.name || ""
+      campaignName: campaign.name || "",
+      inviteCode: parsed.inviteCode
     }
   });
 

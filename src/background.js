@@ -646,7 +646,7 @@ async function runDmCampaignSync({ ddbCampaignId, campaignId, bypassThrottle }) 
 // ---------------------------------------------------------------------------
 
 // Opens the ext-launch tab with mode=dm-link for first-time DM account linking.
-async function handleDmLinkLaunch({ serverUrl, campaignId, email, externalUserId, externalCampaignId, campaignName }) {
+async function handleDmLinkLaunch({ serverUrl, campaignId, email, externalUserId, externalCampaignId, campaignName, inviteCode }) {
   if (!serverUrl || !campaignId || !externalCampaignId) {
     return { ok: false, error: "Missing required parameters for DM link" };
   }
@@ -658,6 +658,10 @@ async function handleDmLinkLaunch({ serverUrl, campaignId, email, externalUserId
   params.set("externalSystem", "dndbeyond");
   params.set("deviceId", deviceId);
   if (campaignName) params.set("campaignName", campaignName);
+  // Stash metadata so handleDmLinkComplete can merge it after the tab completes.
+  await browser.storage.local.set({
+    [`pending-dm-link:${externalCampaignId}`]: { inviteCode: inviteCode || null, campaignName: campaignName || null, serverUrl }
+  });
   browser.tabs.create({ url: `${baseServerUrl(serverUrl)}/ext-launch?${params}` });
   return { ok: true };
 }
@@ -726,18 +730,31 @@ async function handleDmLinkComplete(payload, tabUrl) {
   });
   if (!knownServer) return;
 
+  // Retrieve metadata stashed by handleDmLinkLaunch (inviteCode, campaignName).
+  const pendingKey = `pending-dm-link:${externalCampaignId}`;
+  const pendingData = await browser.storage.local.get(pendingKey);
+  const pending = pendingData[pendingKey] || {};
+
   const deviceId = await getDeviceId();
 
   await setDmLinkRecord(String(externalCampaignId), {
     campaignId,
     externalCampaignId: String(externalCampaignId),
     serverUrl: knownServer.url,
+    inviteCode: pending.inviteCode || null,
+    campaignName: pending.campaignName || null,
     deviceCredential: { credential: deviceCredential.credential, deviceId }
   });
 
   await updateDmConnectionsFromBackground(externalCampaignId, {
-    campaignId, serverUrl: knownServer.url, serverId: knownServer.id
+    campaignId,
+    serverUrl: knownServer.url,
+    serverId: knownServer.id,
+    inviteCode: pending.inviteCode || null,
+    campaignName: pending.campaignName || null
   });
+
+  await browser.storage.local.remove(pendingKey);
 
   // Exchange credential for a token to fire the initial sync
   const exchanged = await apiJson(knownServer, "/api/auth/extension/credential/exchange", {
@@ -753,6 +770,8 @@ async function handleDmLinkComplete(payload, tabUrl) {
       campaignId,
       externalCampaignId: String(externalCampaignId),
       serverUrl: knownServer.url,
+      inviteCode: pending.inviteCode || null,
+      campaignName: pending.campaignName || null,
       deviceCredential: { credential: exchanged.json.credential, deviceId }
     });
   }
