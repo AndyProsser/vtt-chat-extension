@@ -461,25 +461,45 @@ function buildDmExpandForm(campaign, conn, dmLink) {
   wrap.className = "char-expand-form";
   wrap.id = `dm-expand-form-${campaign.id}`;
 
-  const urlLabel = document.createElement("label");
-  urlLabel.textContent = "Invite URL";
-  const urlInput = document.createElement("input");
-  urlInput.type = "url";
-  urlInput.id = `dm-invite-url-${campaign.id}`;
-  urlInput.placeholder = "https://server/join/CODE";
-  urlInput.autocomplete = "off";
-  urlLabel.appendChild(urlInput);
-  wrap.appendChild(urlLabel);
+  const codeLabel = document.createElement("label");
+  codeLabel.textContent = "VTT-Chat Invite Code";
+  const codeInput = document.createElement("input");
+  codeInput.type = "text";
+  codeInput.id = `dm-invite-code-${campaign.id}`;
+  codeInput.placeholder = "e.g. abc123…";
+  codeInput.autocomplete = "off";
+  codeLabel.appendChild(codeInput);
+  wrap.appendChild(codeLabel);
 
-  const preview = document.createElement("div");
-  preview.className = "url-preview";
-  preview.id = `dm-url-preview-${campaign.id}`;
-  wrap.appendChild(preview);
+  const codePreview = document.createElement("div");
+  codePreview.className = "url-preview";
+  codePreview.id = `dm-code-preview-${campaign.id}`;
+  wrap.appendChild(codePreview);
+
+  const emailLabel = document.createElement("label");
+  emailLabel.style.marginTop = "8px";
+  emailLabel.textContent = "Email";
+  const emailInput = document.createElement("input");
+  emailInput.type = "email";
+  emailInput.id = `dm-email-${campaign.id}`;
+  emailInput.readOnly = true;
+  emailLabel.appendChild(emailInput);
+  wrap.appendChild(emailLabel);
+
+  const pwLabel = document.createElement("label");
+  pwLabel.style.marginTop = "8px";
+  pwLabel.textContent = "Password";
+  const pwInput = document.createElement("input");
+  pwInput.type = "password";
+  pwInput.id = `dm-password-${campaign.id}`;
+  pwInput.placeholder = "Your VTT-Chat password";
+  pwLabel.appendChild(pwInput);
+  wrap.appendChild(pwLabel);
 
   if (dmLink) {
     const hint = document.createElement("div");
     hint.style.cssText = "font-size:10px;color:#555;margin-top:4px;";
-    hint.textContent = `✓ Linked to "${conn?.campaignName || campaign.name || "your campaign"}" — enter a new URL to re-link.`;
+    hint.textContent = `✓ Linked to "${conn?.campaignName || campaign.name || "your campaign"}" — enter a new code to re-link.`;
     wrap.appendChild(hint);
   }
 
@@ -489,9 +509,39 @@ function buildDmExpandForm(campaign, conn, dmLink) {
   launchBtn.textContent = dmLink ? "Re-link & Launch as DM" : "Link & Launch as DM";
   wrap.appendChild(launchBtn);
 
-  setTimeout(() => {
-    urlInput.addEventListener("input", () => updatePreview(urlInput.value, preview));
-    launchBtn.addEventListener("click", () => handleDmJoinLaunch(campaign, urlInput));
+  // Wire email pre-fill and event handlers
+  setTimeout(async () => {
+    const state = await getState();
+    emailInput.value = state.ddbUser?.email || state.savedEmail || "";
+
+    let validatedCampaignId = null;
+
+    codeInput.addEventListener("blur", async () => {
+      const code = codeInput.value.trim();
+      if (!code) {
+        codePreview.className = "url-preview";
+        codePreview.textContent = "";
+        validatedCampaignId = null;
+        return;
+      }
+      const result = await browser.runtime.sendMessage({
+        type: "validate-invite-code",
+        payload: { inviteCode: code }
+      });
+      if (result?.ok && result.campaign?.name) {
+        codePreview.className = "url-preview ok";
+        codePreview.textContent = `Campaign: ${result.campaign.name}`;
+        validatedCampaignId = result.campaign.id;
+      } else {
+        codePreview.className = "url-preview error";
+        codePreview.textContent = result?.error || "This code isn't valid";
+        validatedCampaignId = null;
+      }
+    });
+
+    launchBtn.addEventListener("click", () =>
+      handleDmFirstTimeLink(campaign, codeInput, pwInput, () => validatedCampaignId)
+    );
   }, 0);
 
   return wrap;
@@ -715,7 +765,7 @@ function toggleDmExpand(campaignId) {
   expandedDmCampaignId = campaignId;
   byId(`dm-expand-form-${campaignId}`)?.classList.add("open");
   document.querySelector(`.char-card[data-dm-campaign-id="${campaignId}"]`)?.classList.add("selected");
-  setTimeout(() => byId(`dm-invite-url-${campaignId}`)?.focus(), 50);
+  setTimeout(() => byId(`dm-invite-code-${campaignId}`)?.focus(), 50);
 }
 
 // ---------------------------------------------------------------------------
@@ -887,73 +937,73 @@ async function handleJoinLaunch(char, urlInput) {
 }
 
 // ---------------------------------------------------------------------------
-// DM join + launch
+// DM first-time link
 // ---------------------------------------------------------------------------
 
-async function handleDmJoinLaunch(campaign, urlInput) {
-  const urlVal = urlInput.value.trim();
-  const parsed = parseInviteUrl(urlVal);
-  if (!parsed) {
-    showStatus("Please enter a valid invite URL (https://server/join/CODE).", "error");
+function dmLinkInitErrorMessage(code, fallback) {
+  if (code === "INVALID_CREDENTIALS") return "Incorrect email or password.";
+  if (code === "ALREADY_CLAIMED")     return "Another DM has already linked this campaign.";
+  if (code === "IDENTITY_CONFLICT")   return "This DDB account is already linked to a different vtt-chat login. Please contact support.";
+  if (code === "CAMPAIGN_NOT_FOUND")  return "Campaign not found. Check your invite code.";
+  return fallback || "Could not link your account. Please try again.";
+}
+
+async function handleDmFirstTimeLink(campaign, codeInput, pwInput, getValidatedCampaignId) {
+  const code = codeInput.value.trim();
+  if (!code) {
+    showStatus("Please enter your VTT-Chat invite code.", "error");
     return;
   }
 
-  const state = await getState();
-  const email = resolveEmail(state);
-
-  if (!state.ddbUser?.id) {
-    showStatus("No D&D Beyond user detected.", "error");
+  const password = pwInput.value;
+  if (!password) {
+    showStatus("Please enter your VTT-Chat password.", "error");
     return;
   }
 
   const btn = byId(`dm-launch-btn-${campaign.id}`);
   if (btn) btn.disabled = true;
-  showStatus("Checking server & invite…", "info");
+  showStatus("Linking your DM account…", "info");
 
-  const emailInput = byId("user-email");
-  if (emailInput?.value.trim()) await saveState({ savedEmail: emailInput.value.trim() });
-
-  await ensureServer(parsed.serverUrl);
-
-  const pre = await browser.runtime.sendMessage({
-    type: "run-preflight",
-    payload: { inviteCode: parsed.inviteCode, email, externalUserId: String(state.ddbUser.id) }
-  });
-
-  if (!pre?.ok) {
-    showStatus(pre?.error || "Server check failed.", "error");
-    if (btn) btn.disabled = false;
-    return;
+  // Use already-validated campaignId, or validate now
+  let campaignId = getValidatedCampaignId();
+  if (!campaignId) {
+    const validation = await browser.runtime.sendMessage({
+      type: "validate-invite-code",
+      payload: { inviteCode: code }
+    });
+    if (!validation?.ok) {
+      showStatus(validation?.error || "This code isn't valid.", "error");
+      if (btn) btn.disabled = false;
+      return;
+    }
+    campaignId = validation.campaign?.id;
   }
 
-  // VTT-Chat campaign UUID (required to open the correct ext-launch page)
-  const campaignId = pre.invite?.campaign?.id;
   if (!campaignId) {
-    showStatus("Could not resolve campaign — check your invite URL.", "error");
+    showStatus("Campaign not found. Check your invite code.", "error");
     if (btn) btn.disabled = false;
     return;
   }
 
   const result = await browser.runtime.sendMessage({
-    type: "dm-link-launch",
+    type: "dm-link-init",
     payload: {
-      serverUrl: parsed.serverUrl,
+      inviteCode: code,
       campaignId,
-      email,
-      externalUserId: String(state.ddbUser.id),
+      password,
       externalCampaignId: String(campaign.id),
-      campaignName: campaign.name || "",
-      inviteCode: parsed.inviteCode
+      campaignName: campaign.name || ""
     }
   });
 
   if (!result?.ok) {
-    showStatus(result?.error || "Could not open DM login page.", "error");
+    showStatus(dmLinkInitErrorMessage(result?.code, result?.error), "error");
     if (btn) btn.disabled = false;
     return;
   }
 
-  showStatus("Opening DM login page…", "info");
+  showStatus("VTT-Chat is opening as DM…", "ok");
   setTimeout(() => window.close(), 800);
 }
 

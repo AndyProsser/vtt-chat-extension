@@ -10,14 +10,6 @@ const DM_SYNC_THROTTLE_MS = 10 * 60 * 1000;
 let guestSession = null;
 
 browser.runtime.onMessage.addListener((msg, sender) => {
-  // Relayed from the vtt-chat content script when /ext-launch posts the
-  // DM-link completion signal to its own window. sender.tab.url carries the
-  // ext-launch URL, whose query params include externalCampaignId.
-  if (msg.type === "VTT_CHAT_DM_LINK_COMPLETE") {
-    void handleDmLinkComplete(msg.payload, sender?.tab?.url);
-    return;
-  }
-
   if (msg.type === "connect") {
     void handleConnect(msg.payload);
     return;
@@ -64,8 +56,12 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     return runDmCampaignSync(msg.payload || {});
   }
 
-  if (msg.type === "dm-link-launch") {
-    return handleDmLinkLaunch(msg.payload || {});
+  if (msg.type === "validate-invite-code") {
+    return validateInviteCode(msg.payload?.inviteCode || "");
+  }
+
+  if (msg.type === "dm-link-init") {
+    return handleDmLinkInit(msg.payload || {});
   }
 
   if (msg.type === "dm-returning-launch") {
@@ -168,24 +164,6 @@ async function isDmSyncThrottled(campaignId) {
 
 async function recordDmSync(campaignId) {
   await browser.storage.local.set({ [`dmsync:${campaignId}`]: { lastSyncAt: new Date().toISOString() } });
-}
-
-// Updates the dmConnections entry from the background (after DM link completes)
-async function updateDmConnectionsFromBackground(ddbCampaignId, updates) {
-  const { dmConnections: conns = [] } = await browser.storage.local.get("dmConnections");
-  const strId = String(ddbCampaignId);
-  const existing = conns.find(c => String(c.ddbCampaignId) === strId);
-  const updated = {
-    id: existing?.id ?? crypto.randomUUID(),
-    ddbCampaignId: strId,
-    lastConnectedAt: Date.now(),
-    ...existing,
-    ...updates
-  };
-  const next = existing
-    ? conns.map(c => String(c.ddbCampaignId) === strId ? updated : c)
-    : [...conns, updated];
-  await browser.storage.local.set({ dmConnections: next });
 }
 
 // ---------------------------------------------------------------------------
@@ -674,27 +652,6 @@ async function runDmCampaignSync({ ddbCampaignId, campaignId, bypassThrottle }) 
 // DM link flow handlers
 // ---------------------------------------------------------------------------
 
-// Opens the ext-launch tab with mode=dm-link for first-time DM account linking.
-async function handleDmLinkLaunch({ serverUrl, campaignId, email, externalUserId, externalCampaignId, campaignName, inviteCode }) {
-  if (!serverUrl || !campaignId || !externalCampaignId) {
-    return { ok: false, error: "Missing required parameters for DM link" };
-  }
-  const deviceId = await getDeviceId();
-  const params = new URLSearchParams({ campaignId, mode: "dm-link" });
-  if (email) params.set("hint", email);
-  if (externalUserId) params.set("externalUserId", externalUserId);
-  params.set("externalCampaignId", externalCampaignId);
-  params.set("externalSystem", "dndbeyond");
-  params.set("deviceId", deviceId);
-  if (campaignName) params.set("campaignName", campaignName);
-  // Stash metadata so handleDmLinkComplete can merge it after the tab completes.
-  await browser.storage.local.set({
-    [`pending-dm-link:${externalCampaignId}`]: { inviteCode: inviteCode || null, campaignName: campaignName || null, serverUrl }
-  });
-  browser.tabs.create({ url: `${baseServerUrl(serverUrl)}/ext-launch?${params}` });
-  return { ok: true };
-}
-
 // Exchanges the stored DM credential for a fresh token, fires throttled dm-sync, and opens the campaign tab.
 async function handleDmReturningLaunch({ externalCampaignId }) {
   const record = await getDmLinkRecord(externalCampaignId);
@@ -745,94 +702,89 @@ async function handleDmReturningLaunch({ externalCampaignId }) {
   return { ok: true };
 }
 
-// Tracks DM links handled in the last few seconds so the postMessage relay and
-// the URL-hash fallback can both fire for the same completion without launching
-// the session (or re-syncing) twice.
-const recentlyHandledDmLinks = new Set();
+// Validates a player invite code against the active server.
+async function validateInviteCode(inviteCode) {
+  if (!inviteCode) return { ok: false, error: "Invite code is required" };
+  const server = await getActiveServer();
+  if (!server) return { ok: false, error: "No active server configured" };
+  const result = await apiJson(server, `/api/campaigns/invite/${encodeURIComponent(inviteCode)}/validate`);
+  if (!result.response.ok || !result.json.valid) {
+    return { ok: false, error: result.json.message || "This code isn't valid" };
+  }
+  return { ok: true, campaign: result.json.campaign || null };
+}
 
-// Processes the VTT_CHAT_DM_LINK_COMPLETE signal from the ext-launch tab.
-// Reached via two paths: the content-script postMessage relay (tabUrl =
-// sender.tab.url) and the URL-hash fallback (tabUrl = the updated tab URL).
-async function handleDmLinkComplete(payload, tabUrl) {
-  // The payload only carries campaignId + deviceCredential (no externalCampaignId).
-  // Parse externalCampaignId from the tab URL query params — it was sent there in handleDmLinkLaunch.
-  const { campaignId, deviceCredential } = payload || {};
-  if (!campaignId || !deviceCredential?.credential) return;
-
-  // Dedupe across the two signal paths (and any duplicate events on one path).
-  const dedupKey = `${campaignId}:${deviceCredential.credential}`;
-  if (recentlyHandledDmLinks.has(dedupKey)) return;
-  recentlyHandledDmLinks.add(dedupKey);
-  setTimeout(() => recentlyHandledDmLinks.delete(dedupKey), 30000);
-
-  let tabOrigin;
-  let externalCampaignId;
-  try {
-    const parsed = new URL(tabUrl);
-    tabOrigin = parsed.origin;
-    externalCampaignId = parsed.searchParams.get("externalCampaignId") || null;
-  } catch { return; }
-
-  if (!tabOrigin || !externalCampaignId) return;
-
-  const state = await getState();
-  const knownServer = state.servers.find(s => {
-    try { return new URL(s.url).origin === tabOrigin; } catch { return false; }
-  });
-  if (!knownServer) return;
-
-  // Retrieve metadata stashed by handleDmLinkLaunch (inviteCode, campaignName).
-  const pendingKey = `pending-dm-link:${externalCampaignId}`;
-  const pendingData = await browser.storage.local.get(pendingKey);
-  const pending = pendingData[pendingKey] || {};
-
-  const { credential, deviceId } = deviceCredential;
-
-  await setDmLinkRecord(String(externalCampaignId), {
-    campaignId,
-    externalCampaignId: String(externalCampaignId),
-    serverUrl: knownServer.url,
-    inviteCode: pending.inviteCode || null,
-    campaignName: pending.campaignName || null,
-    deviceCredential: { credential, deviceId }
-  });
-
-  await updateDmConnectionsFromBackground(externalCampaignId, {
-    campaignId,
-    serverUrl: knownServer.url,
-    serverId: knownServer.id,
-    inviteCode: pending.inviteCode || null,
-    campaignName: pending.campaignName || null
-  });
-
-  await browser.storage.local.remove(pendingKey);
-
-  // Exchange credential for a token to fire the initial sync
-  const exchanged = await apiJson(knownServer, "/api/auth/extension/credential/exchange", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ credential, deviceId })
-  });
-  if (!exchanged.response.ok) return;
-
-  const token = exchanged.json.token;
-  if (exchanged.json.credential) {
-    await setDmLinkRecord(String(externalCampaignId), {
-      campaignId,
-      externalCampaignId: String(externalCampaignId),
-      serverUrl: knownServer.url,
-      inviteCode: pending.inviteCode || null,
-      campaignName: pending.campaignName || null,
-      deviceCredential: { credential: exchanged.json.credential, deviceId }
-    });
+// Calls dm-link-init on the backend (auth + link + sync + session in one shot),
+// stores the returned credential, then opens the campaign tab.
+async function handleDmLinkInit({ inviteCode, campaignId, password, externalCampaignId, campaignName }) {
+  if (!campaignId || !password || !externalCampaignId) {
+    return { ok: false, error: "Missing required parameters" };
   }
 
-  // Initial sync: no throttle on first link
-  void fetchAndSyncDmCampaign(knownServer, token, String(campaignId), String(externalCampaignId));
-  await recordDmSync(String(campaignId));
+  const server = await getActiveServer();
+  if (!server) return { ok: false, error: "No active server configured" };
 
-  const session = await ensureSession(knownServer, token, String(campaignId));
-  await launchTab(knownServer, String(campaignId), token, session?.sessionId || null);
+  const state = await getState();
+  const ddbUser = state.ddbUser || {};
+  const email = ddbUser.email || state.savedEmail || "";
+  const deviceId = await getDeviceId();
+
+  const result = await apiJson(server, "/api/auth/extension/dm-link-init", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username: email,
+      password,
+      campaignId,
+      externalSystem: EXTERNAL_SYSTEM,
+      externalUserId: String(ddbUser.id || ""),
+      email,
+      displayName: ddbUser.displayName || null,
+      deviceId,
+      campaignName: campaignName || undefined
+    })
+  });
+
+  if (!result.response.ok) {
+    return {
+      ok: false,
+      error: result.json?.message || "Could not link your account. Please try again.",
+      code: result.json?.code || null
+    };
+  }
+
+  const { token, deviceCredential, sessionId } = result.json;
+  const strId = String(externalCampaignId);
+
+  await setDmLinkRecord(strId, {
+    campaignId,
+    externalCampaignId: strId,
+    serverUrl: server.url,
+    inviteCode: inviteCode || null,
+    campaignName: campaignName || null,
+    deviceCredential
+  });
+
+  const { dmConnections: conns = [] } = await browser.storage.local.get("dmConnections");
+  const existing = conns.find(c => String(c.ddbCampaignId) === strId);
+  const updated = {
+    id: existing?.id ?? crypto.randomUUID(),
+    ddbCampaignId: strId,
+    campaignId,
+    serverUrl: server.url,
+    serverId: server.id,
+    inviteCode: inviteCode || null,
+    campaignName: campaignName || null,
+    lastConnectedAt: Date.now()
+  };
+  await browser.storage.local.set({
+    dmConnections: existing
+      ? conns.map(c => String(c.ddbCampaignId) === strId ? updated : c)
+      : [...conns, updated]
+  });
+
+  await launchTab(server, campaignId, token, sessionId || null);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -1459,78 +1411,3 @@ async function handleConnect(payload) {
 }
 
 
-// ---------------------------------------------------------------------------
-// DM link completion detector — wakes the SW even after a restart
-// ---------------------------------------------------------------------------
-
-// Fallback signal: the /ext-launch page may also append the completion payload
-// as a URL hash. The primary signal is the postMessage relayed by the vtt-chat
-// content script (handled in onMessage); handleDmLinkComplete dedupes the two.
-browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (!changeInfo.url) return;
-  const MARKER = "#VTT_CHAT_DM_LINK_COMPLETE=";
-  const idx = changeInfo.url.indexOf(MARKER);
-  if (idx === -1) return;
-  try {
-    const payload = JSON.parse(atob(changeInfo.url.slice(idx + MARKER.length)));
-    void handleDmLinkComplete(payload, changeInfo.url);
-  } catch { /* malformed payload — ignore */ }
-});
-
-// ---------------------------------------------------------------------------
-// Dynamic content-script registration for the VTT-Chat server origin(s)
-// ---------------------------------------------------------------------------
-
-// The vtt-chat relay (vtt-chat-content.js) must run on the configured server
-// origins, which are user-supplied and unknown at build time. We register it
-// dynamically — and keep it in sync as servers are added/removed — instead of
-// using a static manifest content_scripts entry.
-const VTT_RELAY_SCRIPT_ID = "vtt-chat-dm-link-relay";
-
-async function syncVttChatContentScripts() {
-  if (!browser.scripting?.registerContentScripts) return;
-
-  const { servers = [] } = await browser.storage.local.get("servers");
-  const matches = [...new Set(
-    servers
-      .map(s => { try { return `${new URL(s.url).origin}/*`; } catch { return null; } })
-      .filter(Boolean)
-  )];
-
-  let existing = [];
-  try {
-    existing = await browser.scripting.getRegisteredContentScripts({ ids: [VTT_RELAY_SCRIPT_ID] });
-  } catch { /* none registered yet */ }
-
-  if (!matches.length) {
-    if (existing.length) {
-      await browser.scripting.unregisterContentScripts({ ids: [VTT_RELAY_SCRIPT_ID] }).catch(() => {});
-    }
-    return;
-  }
-
-  const definition = {
-    id: VTT_RELAY_SCRIPT_ID,
-    js: ["vtt-chat-content.js"],
-    matches,
-    runAt: "document_idle",
-    persistAcrossSessions: true
-  };
-
-  try {
-    if (existing.length) {
-      await browser.scripting.updateContentScripts([definition]);
-    } else {
-      await browser.scripting.registerContentScripts([definition]);
-    }
-  } catch (e) {
-    console.warn("[VTT-Chat] relay content script registration failed:", e);
-  }
-}
-
-// Re-sync whenever the configured server list changes.
-browser.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.servers) void syncVttChatContentScripts();
-});
-
-void syncVttChatContentScripts();
