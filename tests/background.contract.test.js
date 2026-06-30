@@ -67,7 +67,7 @@ before(async () => {
           token: createJwt(3600),
           user: { campaignId: "camp-uuid", authType: "GUEST", role: "PLAYER" },
           character: { externalCharacterId: "char-1", name: "Aragorn" },
-          deviceCredential: "device-cred-1"
+          deviceCredential: { credential: "device-cred-1", deviceId: "test-device-id" }
         })
       };
     if (urlStr.endsWith("/api/auth/login"))
@@ -222,9 +222,9 @@ test("relaunch-session returns error when no session stored", async () => {
 test("relaunch-session exchanges stored credential and opens tab", async () => {
   resetBetweenTests();
   Object.assign(storage, {
-    lastSession: { serverId: "server-1", campaignId: "camp-uuid", inviteCode: "join-code", authType: "GUEST" },
+    lastSession: { serverId: "server-1", campaignId: "camp-uuid", externalCampaignId: "ddb-camp-1", inviteCode: "join-code", authType: "GUEST" },
     deviceId: "test-device-id",
-    "dc:server-1": "saved-cred"
+    "player:ddb-camp-1:dndbeyond": { campaignId: "camp-uuid", deviceCredential: { credential: "saved-cred", deviceId: "test-device-id" } }
   });
   const r = await dispatch({ type: "relaunch-session" });
   assert.equal(r.ok, true);
@@ -282,7 +282,11 @@ test("guest-login submits character and campaign packet contract fields", async 
 });
 
 test("guest-login stores device credential in storage", async () => {
-  assert.equal(storage["dc:server-1"], "device-cred-1");
+  const record = storage["player:ddb-campaign-1:dndbeyond"];
+  assert.ok(record, "player credential should be stored");
+  assert.equal(record.campaignId, "camp-uuid");
+  assert.equal(record.deviceCredential.credential, "device-cred-1");
+  assert.equal(record.deviceCredential.deviceId, "test-device-id");
 });
 
 // ---------------------------------------------------------------------------

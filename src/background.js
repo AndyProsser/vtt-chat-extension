@@ -115,15 +115,22 @@ async function getDeviceId() {
   return id;
 }
 
-async function getDeviceCredential(serverId) {
-  const key = `dc:${serverId}`;
+// Player credential helpers — keyed per DDB campaign, not per server.
+// Shape: { campaignId: string, deviceCredential: { credential: string, deviceId: string } }
+
+async function getPlayerCredential(externalCampaignId) {
+  const key = `player:${externalCampaignId}:dndbeyond`;
   const data = await browser.storage.local.get(key);
   return data[key] || null;
 }
 
-async function setDeviceCredential(serverId, credential) {
-  if (!serverId || !credential) return;
-  await browser.storage.local.set({ [`dc:${serverId}`]: credential });
+async function setPlayerCredential(externalCampaignId, record) {
+  if (!externalCampaignId || !record) return;
+  await browser.storage.local.set({ [`player:${externalCampaignId}:dndbeyond`]: record });
+}
+
+async function clearPlayerCredential(externalCampaignId) {
+  await browser.storage.local.remove(`player:${externalCampaignId}:dndbeyond`);
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +218,7 @@ function setGuestSession(result, context) {
     token: result.token,
     expiresAt: tokenExpiryMs(result.token),
     campaignId: result.user?.campaignId || context?.campaignId || null,
+    externalCampaignId: context?.externalCampaignId || null,
     inviteCode: context?.inviteCode || null,
     renewalPayload: context?.renewalPayload || null,
     user: result.user || null,
@@ -223,10 +231,11 @@ async function ensureRenewedGuestToken(server) {
   if (!guestSession || !guestSession.token) return null;
   if (!isTokenNearExpiry(guestSession)) return guestSession.token;
 
-  const credential = await getDeviceCredential(server.id);
-  if (!credential) return guestSession.token;
+  const extCampaignId = guestSession.externalCampaignId;
+  const record = extCampaignId ? await getPlayerCredential(extCampaignId) : null;
+  if (!record?.deviceCredential) return guestSession.token;
 
-  const deviceId = await getDeviceId();
+  const { credential, deviceId } = record.deviceCredential;
   const renewed = await apiJson(server, "/api/auth/extension/credential/exchange", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -235,7 +244,10 @@ async function ensureRenewedGuestToken(server) {
 
   if (renewed.response.ok && renewed.json.token) {
     if (renewed.json.credential) {
-      await setDeviceCredential(server.id, renewed.json.credential);
+      await setPlayerCredential(extCampaignId, {
+        campaignId: record.campaignId,
+        deviceCredential: { credential: renewed.json.credential, deviceId }
+      });
     }
     guestSession.token = renewed.json.token;
     guestSession.expiresAt = tokenExpiryMs(renewed.json.token);
@@ -259,10 +271,11 @@ async function ensureGuestSession() {
   // In-memory token still present but near-expiry — return it anyway for now
   if (guestSession?.token) return guestSession;
 
-  // Prefer a fresh token via device credential exchange
-  const credential = await getDeviceCredential(server.id);
-  if (credential) {
-    const deviceId = await getDeviceId();
+  // Prefer a fresh token via player credential exchange
+  const extCampaignId = lastSession.externalCampaignId || null;
+  const record = extCampaignId ? await getPlayerCredential(extCampaignId) : null;
+  if (record?.deviceCredential) {
+    const { credential, deviceId } = record.deviceCredential;
     const exchanged = await apiJson(server, "/api/auth/extension/credential/exchange", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -271,12 +284,16 @@ async function ensureGuestSession() {
 
     if (exchanged.response.ok && exchanged.json.token) {
       if (exchanged.json.credential) {
-        await setDeviceCredential(server.id, exchanged.json.credential);
+        await setPlayerCredential(extCampaignId, {
+          campaignId: record.campaignId,
+          deviceCredential: { credential: exchanged.json.credential, deviceId }
+        });
       }
       guestSession = {
         token: exchanged.json.token,
         expiresAt: tokenExpiryMs(exchanged.json.token),
         campaignId: exchanged.json.user?.campaignId || lastSession.campaignId,
+        externalCampaignId: extCampaignId,
         inviteCode: lastSession.inviteCode,
         renewalPayload: null,
         user: exchanged.json.user || null,
@@ -285,9 +302,12 @@ async function ensureGuestSession() {
       };
       return guestSession;
     }
+
+    // Credential rejected — clear it so the user hits the first-time flow
+    await clearPlayerCredential(extCampaignId);
   }
 
-  // No device credential (or exchange failed) — restore from the last known token.
+  // No credential (or exchange failed) — restore from the last known token.
   // If it has since expired the backend will reject the sync; the user can then
   // reconnect from the popup to get a fresh one.
   if (!lastSession.token) return null;
@@ -295,6 +315,7 @@ async function ensureGuestSession() {
     token: lastSession.token,
     expiresAt: null,
     campaignId: lastSession.campaignId,
+    externalCampaignId: extCampaignId,
     inviteCode: lastSession.inviteCode || null,
     renewalPayload: null,
     user: null,
@@ -981,13 +1002,17 @@ async function runGuestLoginForPopup(payload) {
     };
   }
 
-  if (login.json.deviceCredential) {
-    await setDeviceCredential(server.id, login.json.deviceCredential);
+  if (login.json.deviceCredential && context.externalCampaignId) {
+    await setPlayerCredential(context.externalCampaignId, {
+      campaignId: login.json.user?.campaignId || null,
+      deviceCredential: login.json.deviceCredential
+    });
   }
 
   setGuestSession(login.json, {
     inviteCode: context.inviteCode,
     campaignId: login.json.user?.campaignId || null,
+    externalCampaignId: context.externalCampaignId || null,
     renewalPayload: null
   });
 
@@ -996,6 +1021,7 @@ async function runGuestLoginForPopup(payload) {
       serverId: server.id,
       token: login.json.token,
       campaignId: login.json.user?.campaignId || null,
+      externalCampaignId: context.externalCampaignId || null,
       inviteCode: context.inviteCode,
       role: login.json.user?.role || null,
       connectedAt: Date.now(),
@@ -1266,9 +1292,10 @@ async function handleRelaunchSession() {
     : null;
 
   if (!token) {
-    const credential = await getDeviceCredential(server.id);
-    if (credential) {
-      const deviceId = await getDeviceId();
+    const extCampaignId = lastSession.externalCampaignId || null;
+    const record = extCampaignId ? await getPlayerCredential(extCampaignId) : null;
+    if (record?.deviceCredential) {
+      const { credential, deviceId } = record.deviceCredential;
       const exchanged = await apiJson(server, "/api/auth/extension/credential/exchange", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1277,12 +1304,16 @@ async function handleRelaunchSession() {
       if (exchanged.response.ok && exchanged.json.token) {
         token = exchanged.json.token;
         if (exchanged.json.credential) {
-          await setDeviceCredential(server.id, exchanged.json.credential);
+          await setPlayerCredential(extCampaignId, {
+            campaignId: record.campaignId,
+            deviceCredential: { credential: exchanged.json.credential, deviceId }
+          });
         }
         guestSession = {
           token,
           expiresAt: tokenExpiryMs(token),
           campaignId: exchanged.json.user?.campaignId || campaignId,
+          externalCampaignId: extCampaignId,
           inviteCode: lastSession.inviteCode,
           renewalPayload: null,
           user: exchanged.json.user || null,
