@@ -622,11 +622,11 @@ async function runDmCampaignSync({ ddbCampaignId, campaignId, bypassThrottle }) 
   // Try DM link credential first (full-account token — preferred for DM ops)
   const dmLink = await getDmLinkRecord(ddbCampaignId);
   if (dmLink?.deviceCredential?.credential && dmLink?.campaignId) {
-    const deviceId = await getDeviceId();
+    const { credential, deviceId } = dmLink.deviceCredential;
     const exchanged = await apiJson(server, "/api/auth/extension/credential/exchange", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ credential: dmLink.deviceCredential.credential, deviceId })
+      body: JSON.stringify({ credential, deviceId })
     });
     if (exchanged.response.ok && exchanged.json.token) {
       token = exchanged.json.token;
@@ -697,11 +697,11 @@ async function handleDmReturningLaunch({ externalCampaignId }) {
   const server = await getActiveServer();
   if (!server) return { ok: false, error: "No active server configured" };
 
-  const deviceId = await getDeviceId();
+  const { credential, deviceId } = record.deviceCredential;
   const exchanged = await apiJson(server, "/api/auth/extension/credential/exchange", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ credential: record.deviceCredential.credential, deviceId })
+    body: JSON.stringify({ credential, deviceId })
   });
 
   if (!exchanged.response.ok) {
@@ -756,7 +756,7 @@ async function handleDmLinkComplete(payload, tabUrl) {
   const pendingData = await browser.storage.local.get(pendingKey);
   const pending = pendingData[pendingKey] || {};
 
-  const deviceId = await getDeviceId();
+  const { credential, deviceId } = deviceCredential;
 
   await setDmLinkRecord(String(externalCampaignId), {
     campaignId,
@@ -764,7 +764,7 @@ async function handleDmLinkComplete(payload, tabUrl) {
     serverUrl: knownServer.url,
     inviteCode: pending.inviteCode || null,
     campaignName: pending.campaignName || null,
-    deviceCredential: { credential: deviceCredential.credential, deviceId }
+    deviceCredential: { credential, deviceId }
   });
 
   await updateDmConnectionsFromBackground(externalCampaignId, {
@@ -781,7 +781,7 @@ async function handleDmLinkComplete(payload, tabUrl) {
   const exchanged = await apiJson(knownServer, "/api/auth/extension/credential/exchange", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ credential: deviceCredential.credential, deviceId })
+    body: JSON.stringify({ credential, deviceId })
   });
   if (!exchanged.response.ok) return;
 
