@@ -282,25 +282,6 @@ async function renderDmCampaigns(ddbOwnedCampaigns, dmConnections, ddbUser) {
     }))
   );
 
-  // Auto-launch when exactly one DM campaign is already linked and nothing is expanded.
-  const linked = campaignStates.filter(s => s.dmLink);
-  if (linked.length === 1 && expandedDmCampaignId == null) {
-    showStatus("Connecting as DM…", "info");
-    const result = await browser.runtime.sendMessage({
-      type: "dm-returning-launch",
-      payload: { externalCampaignId: String(linked[0].campaign.id) }
-    });
-    if (result?.ok) {
-      showStatus("VTT-Chat is opening as DM…", "ok");
-      setTimeout(() => window.close(), 800);
-      return;
-    }
-    if (!result?.credentialExpired) {
-      showStatus(result?.error || "DM launch failed.", "error");
-    }
-    // Credential expired or launch failed — fall through to show form so user can re-link.
-  }
-
   container.innerHTML = "";
 
   for (const { campaign, conn, dmLink } of campaignStates) {
@@ -524,15 +505,11 @@ function buildDmExpandForm(campaign, conn, dmLink) {
     // validatedState is set after a successful invite validation on blur
     let validatedState = null;
 
-    urlInput.addEventListener("blur", async () => {
+    async function validateUrlInput() {
       const parsed = parseInviteUrl(urlInput.value);
       if (!parsed) {
-        preview.className = urlInput.value.trim()
-          ? "url-preview error"
-          : "url-preview";
-        preview.textContent = urlInput.value.trim()
-          ? "Expected format: https://server/join/CODE"
-          : "";
+        preview.className = urlInput.value.trim() ? "url-preview error" : "url-preview";
+        preview.textContent = urlInput.value.trim() ? "Expected format: https://server/join/CODE" : "";
         credSection.style.display = "none";
         validatedState = null;
         return;
@@ -565,19 +542,23 @@ function buildDmExpandForm(campaign, conn, dmLink) {
         devUsername: result.dev?.dmUsername || null
       };
 
+      const campaignLabel = result.campaign?.name || parsed.inviteCode;
+      preview.className = "url-preview ok";
+      preview.textContent = isDevMode
+        ? `Campaign: ${campaignLabel} · DEV mode`
+        : `Campaign: ${campaignLabel}`;
+
       if (isDevMode) {
-        preview.className = "url-preview ok";
-        preview.textContent = `Campaign: ${result.campaign?.name || parsed.inviteCode} · DEV mode`;
-        credSection.style.display = "none";
-        // Auto-link immediately in DEV — no credential form needed
-        handleDmFirstTimeLink(campaign, urlInput, pwInput, () => validatedState);
-      } else {
-        preview.className = "url-preview ok";
-        preview.textContent = `Campaign: ${result.campaign?.name || parsed.inviteCode}`;
-        credSection.style.display = "block";
-        setTimeout(() => pwInput.focus(), 50);
+        emailInput.value = result.dev.dmUsername;
+        pwInput.value = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
       }
-    });
+      credSection.style.display = "block";
+      setTimeout(() => pwInput.focus(), 50);
+    }
+
+    urlInput.addEventListener("blur", validateUrlInput);
+    // Validate immediately after paste without requiring a tab-away
+    urlInput.addEventListener("paste", () => setTimeout(validateUrlInput, 0));
 
     launchBtn.addEventListener("click", () =>
       handleDmFirstTimeLink(campaign, urlInput, pwInput, () => validatedState)
@@ -1028,20 +1009,18 @@ async function handleDmFirstTimeLink(campaign, urlInput, pwInput, getValidatedSt
     return;
   }
 
-  let username, password;
-  if (state.devMode) {
-    username = state.devUsername;
-    password = `dev-${Math.random().toString(36).slice(2)}`;
-  } else {
-    const formState = await getState();
-    username = formState.ddbUser?.email || byId(`dm-email-${campaign.id}`)?.value.trim() || formState.savedEmail || "";
-    password = pwInput.value;
-    if (!password) {
-      showStatus("Please enter your VTT-Chat password.", "error");
-      if (btn) btn.disabled = false;
-      return;
-    }
+  const password = pwInput.value;
+  if (!password) {
+    showStatus("Please enter your VTT-Chat password.", "error");
+    if (btn) btn.disabled = false;
+    return;
   }
+
+  // DEV: backend expects the plain dmUsername (not email format)
+  // PROD: use the DDB email pre-filled into the form
+  const username = state.devMode
+    ? state.devUsername
+    : byId(`dm-email-${campaign.id}`)?.value.trim() || "";
 
   const result = await browser.runtime.sendMessage({
     type: "dm-link-init",

@@ -739,6 +739,7 @@ async function handleDmLinkInit({ inviteCode, campaignId, username, password, ex
       campaignId,
       externalSystem: EXTERNAL_SYSTEM,
       externalUserId: String(ddbUser.id || ""),
+      externalCampaignId: String(externalCampaignId || ""),
       email,
       displayName: ddbUser.displayName || null,
       deviceId,
