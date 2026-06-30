@@ -26,7 +26,6 @@ function build(target, overrideFile) {
 
   copy(`icons`, `${outDir}/icons`);
   copy(`${srcDir}/content.js`, `${outDir}/content.js`);
-  copy(`${srcDir}/vtt-chat-content.js`, `${outDir}/vtt-chat-content.js`);
   copy(`${srcDir}/background.js`, `${outDir}/background.js`);
   copy(`${srcDir}/popup.html`, `${outDir}/popup.html`);
   copy(`${srcDir}/popup.js`, `${outDir}/popup.js`);
