@@ -273,11 +273,36 @@ async function renderDmCampaigns(ddbOwnedCampaigns, dmConnections, ddbUser) {
     existingLabel.appendChild(devBtn);
   }
 
+  const campaignStates = await Promise.all(
+    dmOwned.map(async campaign => ({
+      campaign,
+      conn: findDmConn(dmConnections, campaign.id),
+      dmLink: await getDmLinkState(campaign.id)
+    }))
+  );
+
+  // Auto-launch when exactly one DM campaign is already linked and nothing is expanded.
+  const linked = campaignStates.filter(s => s.dmLink);
+  if (linked.length === 1 && expandedDmCampaignId == null) {
+    showStatus("Connecting as DM…", "info");
+    const result = await browser.runtime.sendMessage({
+      type: "dm-returning-launch",
+      payload: { externalCampaignId: String(linked[0].campaign.id) }
+    });
+    if (result?.ok) {
+      showStatus("VTT-Chat is opening as DM…", "ok");
+      setTimeout(() => window.close(), 800);
+      return;
+    }
+    if (!result?.credentialExpired) {
+      showStatus(result?.error || "DM launch failed.", "error");
+    }
+    // Credential expired or launch failed — fall through to show form so user can re-link.
+  }
+
   container.innerHTML = "";
 
-  for (const campaign of dmOwned) {
-    const conn = findDmConn(dmConnections, campaign.id);
-    const dmLink = await getDmLinkState(campaign.id);
+  for (const { campaign, conn, dmLink } of campaignStates) {
     container.appendChild(buildDmCard(campaign, conn, false, dmLink));
     container.appendChild(buildDmExpandForm(campaign, conn, dmLink));
   }

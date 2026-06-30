@@ -73,12 +73,34 @@ function extractFromNextFlight() {
   }
 }
 
-function extractDdbUser() {
+async function extractFromCobaltTokenAsync() {
+  const token = await fetchCobaltAuthToken();
+  if (!token) return null;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const pad = (s) => s + "=".repeat((4 - (s.length % 4)) % 4);
+    const payload = JSON.parse(atob(pad(parts[1].replace(/-/g, "+").replace(/_/g, "/"))));
+    const id = payload.sub || payload.UserId || payload.userId || payload.id;
+    if (!id) return null;
+    return {
+      id: Number(id),
+      displayName: payload.DisplayName || payload.displayName || payload.preferred_username || payload.name || null,
+      avatarUrl: payload.AvatarUrl || payload.avatarUrl || payload.picture || null,
+      email: payload.Email || payload.email || null,
+      roles: Array.isArray(payload.Roles) ? payload.Roles : (Array.isArray(payload.roles) ? payload.roles : [])
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function extractDdbUser() {
   return (
     extractFromMegaMenu() ||
     extractFromCobalt() ||
     extractFromNextFlight() ||
-    null
+    await extractFromCobaltTokenAsync()
   );
 }
 
@@ -785,7 +807,7 @@ async function ensureDdbCache() {
 
   try {
     if (userCacheStale) {
-      const user = extractDdbUser();
+      const user = await extractDdbUser();
       if (!user) {
         await browser.storage.local.set({
           ddbUser: null,

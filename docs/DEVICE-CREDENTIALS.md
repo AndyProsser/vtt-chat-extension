@@ -23,13 +23,13 @@ Every time after:  deviceCredential → credential/exchange → fresh JWT → la
 
 ## Storage Keys
 
-All credential data lives in `localStorage` so it survives browser restarts.
+All credential data lives in `browser.storage.local` (`chrome.storage.local`) so it survives browser restarts.
 
-| Key                                            | Shape                        | Used by                                     |
-| ---------------------------------------------- | ---------------------------- | ------------------------------------------- |
-| `player:<externalCampaignId>:<externalSystem>` | `StoredCredential`           | Player reconnect                            |
-| `dmlink:<externalCampaignId>:<externalSystem>` | `StoredCredential`           | DM reconnect                                |
-| `dmsync:<campaignId>`                          | `{ lastSyncAt: ISO-string }` | DM sync throttle (`chrome.storage.session`) |
+| Key                                            | Shape                        | Used by          |
+| ---------------------------------------------- | ---------------------------- | ---------------- |
+| `player:<externalCampaignId>:<externalSystem>` | `StoredCredential`           | Player reconnect |
+| `dmlink:<externalCampaignId>:<externalSystem>` | `StoredCredential`           | DM reconnect     |
+| `dmsync:<campaignId>`                          | `{ lastSyncAt: ISO-string }` | DM sync throttle |
 
 ```typescript
 type StoredCredential = {
@@ -40,7 +40,7 @@ type StoredCredential = {
 
 `externalCampaignId` is the DDB campaign ID scraped from the campaign page. `externalSystem` is `"dndbeyond"` (or the appropriate system identifier).
 
-`chrome.storage.session` is used for the sync throttle only — it is intentionally cleared on browser close since throttle state doesn't need to survive restarts.
+The `dmsync:` throttle key is stored in `browser.storage.local` so that sync doesn't re-fire on every service worker restart within the same 10-minute window.
 
 ---
 
@@ -73,36 +73,40 @@ if (response.deviceCredential) {
     campaignId: response.user.campaignId,
     deviceCredential: response.deviceCredential,
   }
-  localStorage.setItem(`player:${externalCampaignId}:${externalSystem}`, JSON.stringify(stored))
+  await browser.storage.local.set({
+    [`player:${externalCampaignId}:${externalSystem}`]: stored
+  })
 }
 ```
 
 ---
 
-## First-Time DM Link (postMessage handler)
+## First-Time DM Link (tabs.onUpdated hash detection)
 
-After the ext-launch page posts `VTT_CHAT_DM_LINK_COMPLETE` (see [DM-LINK.md §9](DM-LINK.md)):
+After the ext-launch page appends `#VTT_CHAT_DM_LINK_COMPLETE=<base64>` to its URL (see [DM-LINK.md §9](DM-LINK.md)), the background service worker detects the change via `tabs.onUpdated` and parses `externalCampaignId` from the URL query params (which were sent with the original ext-launch request):
 
 ```typescript
-// { type: 'VTT_CHAT_DM_LINK_COMPLETE',
-//   payload: { campaignId, deviceCredential: { credential, deviceId }, merged } }
+// Payload decoded from hash: { campaignId, deviceCredential: { credential, deviceId }, merged }
 
-window.addEventListener('message', (event: MessageEvent) => {
-  if (event.origin !== VTT_CHAT_ORIGIN) return
-  if (event.data?.type !== 'VTT_CHAT_DM_LINK_COMPLETE') return
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!changeInfo.url) return
+  const MARKER = '#VTT_CHAT_DM_LINK_COMPLETE='
+  const idx = changeInfo.url.indexOf(MARKER)
+  if (idx === -1) return
 
-  const { campaignId, deviceCredential } = event.data.payload as {
-    campaignId: string
-    deviceCredential: { credential: string; deviceId: string }
-    merged: boolean
-  }
+  const payload = JSON.parse(atob(changeInfo.url.slice(idx + MARKER.length)))
+  const { campaignId, deviceCredential } = payload
 
-  localStorage.setItem(
-    `dmlink:${externalCampaignId}:${externalSystem}`,
-    JSON.stringify({ campaignId, deviceCredential } satisfies StoredCredential)
-  )
+  // externalCampaignId is read from the URL query params, not the payload
+  const parsed = new URL(changeInfo.url)
+  const externalCampaignId = parsed.searchParams.get('externalCampaignId')
+  if (!externalCampaignId) return
+
+  const stored: StoredCredential = { campaignId, deviceCredential }
+  await browser.storage.local.set({
+    [`dmlink:${externalCampaignId}:${externalSystem}`]: stored
+  })
 })
-```
 
 ---
 
@@ -121,7 +125,7 @@ async function exchangeCredential(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       credential: stored.deviceCredential.credential,
-      deviceId: stored.deviceCredential.deviceId,
+      deviceId: stored.deviceCredential.deviceId, // always use the deviceId stored with the credential
     }),
   })
 
@@ -143,7 +147,7 @@ async function exchangeCredential(
       deviceId: stored.deviceCredential.deviceId,
     },
   }
-  localStorage.setItem(storageKey, JSON.stringify(updated))
+  await browser.storage.local.set({ [storageKey]: updated })
 
   return data.token
 }
@@ -153,7 +157,7 @@ async function exchangeCredential(
 
 ## Player Reconnect
 
-Called on page load when the user is a campaign member but not the DM.
+Called from the extension popup when the user is a campaign member but not the DM.
 
 ```typescript
 async function tryPlayerReconnect(
@@ -162,21 +166,19 @@ async function tryPlayerReconnect(
   apiBase: string
 ): Promise<'launched' | 'needs-invite-code'> {
   const key = `player:${externalCampaignId}:${externalSystem}`
-  const raw = localStorage.getItem(key)
-  if (!raw) return 'needs-invite-code'
-
-  const stored: StoredCredential = JSON.parse(raw)
+  const data = await browser.storage.local.get(key)
+  const stored: StoredCredential | null = data[key] ?? null
+  if (!stored) return 'needs-invite-code'
 
   try {
     const token = await exchangeCredential(stored, key, apiBase)
-    // sessionId left empty — /ext-launch will call session/ensure itself
-    window.open(
-      `${VTT_CHAT_ORIGIN}/ext-launch?campaignId=${stored.campaignId}&token=${encodeURIComponent(token)}&sessionId=`,
-      '_blank'
-    )
+    const session = await ensureSession(apiBase, stored.campaignId, token)
+    browser.tabs.create({
+      url: `${VTT_CHAT_ORIGIN}/ext-launch?campaignId=${stored.campaignId}&token=${encodeURIComponent(token)}&sessionId=${encodeURIComponent(session?.sessionId ?? '')}`
+    })
     return 'launched'
   } catch {
-    localStorage.removeItem(key)
+    await browser.storage.local.remove(key)
     return 'needs-invite-code' // fall back to invite code entry
   }
 }
@@ -186,7 +188,9 @@ async function tryPlayerReconnect(
 
 ## DM Reconnect
 
-Called on page load when the DDB user is detected as the campaign DM.
+Called from the extension popup when the DDB user is detected as the campaign DM.
+
+**No password prompt.** The device credential is exchanged for a fresh JWT, which is passed directly to `/ext-launch` via the `?token=` param. The ext-launch token path validates it silently and redirects straight to the campaign workspace — no login form is ever shown.
 
 ```typescript
 async function tryDmReconnect(
@@ -195,28 +199,26 @@ async function tryDmReconnect(
   apiBase: string
 ): Promise<'launched' | 'needs-dm-link'> {
   const key = `dmlink:${externalCampaignId}:${externalSystem}`
-  const raw = localStorage.getItem(key)
-  if (!raw) return 'needs-dm-link'
-
-  const stored: StoredCredential = JSON.parse(raw)
+  const data = await browser.storage.local.get(key)
+  const stored: StoredCredential | null = data[key] ?? null
+  if (!stored) return 'needs-dm-link'
 
   try {
     const token = await exchangeCredential(stored, key, apiBase)
+    const authHeader = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
 
-    // dm-sync throttle: at most once per 10 minutes per campaign
+    // dm-sync throttle: at most once per 10 minutes per campaign.
+    // Stored in browser.storage.local so throttle persists across SW restarts.
     const syncKey = `dmsync:${stored.campaignId}`
-    const lastSync = await chrome.storage.session.get(syncKey)
+    const syncData = await browser.storage.local.get(syncKey)
     const sinceLastSync =
       Date.now() -
-      (lastSync?.[syncKey]?.lastSyncAt ? new Date(lastSync[syncKey].lastSyncAt).getTime() : 0)
+      (syncData?.[syncKey]?.lastSyncAt ? new Date(syncData[syncKey].lastSyncAt).getTime() : 0)
 
     if (sinceLastSync > 10 * 60 * 1000) {
       await fetch(`${apiBase}/api/integrations/external/dm-sync`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: authHeader,
         body: JSON.stringify({
           campaignId: stored.campaignId,
           externalSystem,
@@ -224,19 +226,26 @@ async function tryDmReconnect(
           characters: [],
         }),
       }).catch(() => {}) // non-fatal — sync will retry on next launch
-      await chrome.storage.session.set({
+      await browser.storage.local.set({
         [syncKey]: { lastSyncAt: new Date().toISOString() },
       })
     }
 
-    window.open(
-      `${VTT_CHAT_ORIGIN}/ext-launch?campaignId=${stored.campaignId}&token=${encodeURIComponent(token)}&sessionId=`,
-      '_blank'
-    )
+    // Confirm or create an IDLE session so the workspace has a sessionId on arrival.
+    const ensureRes = await fetch(`${apiBase}/api/campaigns/${stored.campaignId}/session/ensure`, {
+      method: 'POST',
+      headers: authHeader,
+    })
+    const { sessionId = '' } = ensureRes.ok ? await ensureRes.json().catch(() => ({})) : {}
+
+    // Open ext-launch with the fresh JWT — no password prompt shown.
+    browser.tabs.create({
+      url: `${VTT_CHAT_ORIGIN}/ext-launch?campaignId=${stored.campaignId}&token=${encodeURIComponent(token)}&sessionId=${encodeURIComponent(sessionId)}`
+    })
     return 'launched'
   } catch {
-    localStorage.removeItem(key)
-    return 'needs-dm-link' // fall back to first-time DM link flow
+    await browser.storage.local.remove(key)
+    return 'needs-dm-link' // credential invalid — fall back to first-time DM link flow
   }
 }
 ```
@@ -277,8 +286,8 @@ In all error cases remove the stale key before falling back. Re-running the firs
 
 ## Security Notes
 
-- The JWT is **never** persisted to `localStorage`, `sessionStorage`, `chrome.storage`, or cookies. It lives only in background script memory and is lost when the browser is closed.
-- The `deviceCredential` is what persists in `localStorage` — it is a long-lived opaque token that can be exchanged for a fresh short-lived JWT.
+- The JWT is **never** persisted to `chrome.storage`, `localStorage`, `sessionStorage`, or cookies. It lives only in background service worker memory and is lost when the SW terminates.
+- The `deviceCredential` is what persists in `browser.storage.local` — it is a long-lived opaque token that can be exchanged for a fresh short-lived JWT.
 - Credentials are stored server-side as salted SHA-256 hashes; the plaintext is never persisted.
 - Credential exchange is rate-limited: max 10 exchanges per `deviceId` per minute.
 - Rotation on every exchange prevents replay of an intercepted credential.

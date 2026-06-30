@@ -32,7 +32,10 @@
   "content_scripts": [
     {
       "matches": [
+        "https://www.dndbeyond.com/*",
+        "https://www.dndbeyond.com/characters",
         "https://www.dndbeyond.com/characters/*",
+        "https://www.dndbeyond.com/campaigns",
         "https://www.dndbeyond.com/campaigns/*"
       ],
       "js": [

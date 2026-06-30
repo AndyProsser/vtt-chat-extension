@@ -739,11 +739,20 @@ async function handleDmReturningLaunch({ externalCampaignId }) {
 
 // Processes the VTT_CHAT_DM_LINK_COMPLETE signal from the ext-launch tab.
 async function handleDmLinkComplete(payload, tabUrl) {
-  const { campaignId, externalCampaignId, deviceCredential } = payload;
-  if (!campaignId || !externalCampaignId || !deviceCredential?.credential) return;
+  // The payload only carries campaignId + deviceCredential (no externalCampaignId).
+  // Parse externalCampaignId from the tab URL query params — it was sent there in handleDmLinkLaunch.
+  const { campaignId, deviceCredential } = payload;
+  if (!campaignId || !deviceCredential?.credential) return;
 
   let tabOrigin;
-  try { tabOrigin = new URL(tabUrl).origin; } catch { return; }
+  let externalCampaignId;
+  try {
+    const parsed = new URL(tabUrl);
+    tabOrigin = parsed.origin;
+    externalCampaignId = parsed.searchParams.get("externalCampaignId") || null;
+  } catch { return; }
+
+  if (!tabOrigin || !externalCampaignId) return;
 
   const state = await getState();
   const knownServer = state.servers.find(s => {
@@ -801,7 +810,8 @@ async function handleDmLinkComplete(payload, tabUrl) {
   void fetchAndSyncDmCampaign(knownServer, token, String(campaignId), String(externalCampaignId));
   await recordDmSync(String(campaignId));
 
-  void ensureSession(knownServer, token, String(campaignId));
+  const session = await ensureSession(knownServer, token, String(campaignId));
+  await launchTab(knownServer, String(campaignId), token, session?.sessionId || null);
 }
 
 // ---------------------------------------------------------------------------

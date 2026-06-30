@@ -89,8 +89,12 @@ _Runs once per DM per campaign. Establishes the campaign link, creates the Exter
       → if invalid: show error, stop
 5.  Extension shows: "Link 'The Lost Mines of Phandelver' to this DDB campaign? [Confirm]"
 6.  DM clicks Confirm → extension opens:
-        /ext-launch?campaignId=<uuid>&hint=<ddb-email>&mode=dm-link
+        /ext-launch?campaignId=<uuid>&mode=dm-link&hint=<ddb-email>
+          &externalUserId=<ddb-user-id>&externalCampaignId=<ddb-campaign-id>
+          &externalSystem=dndbeyond&deviceId=<install-uuid>&campaignName=<url-encoded-name>
       Note: no JWT in URL — this path requires password login; guest bypass is blocked.
+      Note: externalCampaignId is carried in the URL so the background can store the
+            credential under the correct key when the link completes.
 7.  /ext-launch shows email (pre-filled from DDB, read-only) + password field.
       Page heading: "Log in to link your DM account"
 8.  DM submits credentials → POST /api/auth/login → returns full-account JWT.
@@ -108,33 +112,44 @@ _Runs once per DM per campaign. Establishes the campaign link, creates the Exter
            vi.  Returns { deviceCredential, merged, mergedAccountSummary? }.
       b. POST /api/integrations/external/dm-sync → sync campaign name (best-effort; non-fatal).
       c. POST /api/campaigns/:campaignId/session/ensure → confirms or creates an IDLE session.
-      d. Posts VTT_CHAT_DM_LINK_COMPLETE to window.opener (§9) with the deviceCredential.
-10. Background script stores deviceCredential in localStorage.
-    Key: dmlink:<externalCampaignId>:<externalSystem>
+      d. Appends #VTT_CHAT_DM_LINK_COMPLETE=<base64-payload> to the tab URL (§9).
+10. Background script detects the hash change via tabs.onUpdated, stores deviceCredential
+    in browser.storage.local keyed by dmlink:<externalCampaignId>:<externalSystem>.
+    externalCampaignId is read from the tab URL query params (sent in step 6).
     See DEVICE-CREDENTIALS.md for the full storage shape.
-11. /ext-launch redirects to campaign workspace.
+11. /ext-launch redirects to campaign workspace. Background auto-launches DM session.
 ```
 
 ---
 
 ## 5. DM Returning Launch Flow
 
-_Normal path for all subsequent DM launches. No invite code entry required._
+_Normal path for all subsequent DM launches. No invite code, no password prompt — the device credential is the sole auth mechanism._
+
+The DDB extension has already verified the DM is logged into DDB. Combined with the stored device credential, no vtt-chat password is ever required after the initial link.
 
 ```text
 1.  Extension detects DM ownership on DDB campaign page.
-2.  Extension finds stored deviceCredential for this (campaignId, externalSystem).
+2.  Extension finds stored deviceCredential in localStorage
+    (key: dmlink:<externalCampaignId>:<externalSystem>).
 3.  POST /api/auth/extension/credential/exchange { credential, deviceId }
-      → returns fresh JWT + rotated credential (store immediately)
-      → CREDENTIAL_INVALID / CREDENTIAL_EXPIRED_GUEST → fall back to first-time flow (§4)
-        (this handles the edge case where the credential was issued to a
-         now-merged guest account and the server-side credential record is gone)
+      → returns { token, credential } — fresh JWT + rotated credential
+      → Store the rotated credential immediately (old one is now invalid)
+      → On CREDENTIAL_INVALID / CREDENTIAL_EXPIRED_GUEST: clear storage,
+        fall back to first-time flow (§4)
 4.  Extension fires dm-sync (throttled: at most once per 10 minutes per campaign):
-        POST /api/integrations/external/dm-sync
-5.  POST /api/campaigns/:campaignId/session/ensure → confirm session.
+        POST /api/integrations/external/dm-sync { campaignId, externalSystem,
+          externalCampaignId, characters: [] }
+      → updates campaign name and character stubs from DDB (best-effort; non-fatal)
+5.  POST /api/campaigns/:campaignId/session/ensure
+      → creates or confirms the IDLE session
+      → returns { sessionId, sessionState, campaignDisplayState }
 6.  Open /ext-launch?campaignId=<uuid>&token=<jwt>&sessionId=<id>
-      → auto-login, redirect to campaign workspace.
+      → ext-launch validates the token silently (no password form shown)
+      → redirects straight to campaign workspace
 ```
+
+The `token` in the URL is what suppresses the password form. `/ext-launch` has two paths: the **token path** (auto-login, silent) and the **DM-link path** (first-time only, requires password). Returning DM always uses the token path.
 
 ---
 
@@ -269,29 +284,37 @@ When `campaignData.name` is present in a `POST /api/integrations/external/dm-syn
 
 ---
 
-## 9. postMessage Contract — /ext-launch → Extension
+## 9. Completion Signal — /ext-launch → Extension
 
-After a successful `dm-link` call, the `/ext-launch` page posts a message to the opener (the extension background script) so the credential can be stored:
+After a successful `dm-link` call, the `/ext-launch` page signals the background script by appending a base64-encoded payload to the tab URL as a hash fragment:
+
+```text
+#VTT_CHAT_DM_LINK_COMPLETE=<base64url(JSON)>
+```
+
+The JSON payload is:
 
 ```json
 {
-  "type": "VTT_CHAT_DM_LINK_COMPLETE",
-  "payload": {
-    "campaignId": "uuid",
-    "deviceCredential": {
-      "credential": "opaque-string",
-      "deviceId": "uuid"
-    },
-    "merged": false
-  }
+  "campaignId": "uuid",
+  "deviceCredential": {
+    "credential": "opaque-string",
+    "deviceId": "uuid"
+  },
+  "merged": false
 }
 ```
 
+Note: the payload does **not** include `externalCampaignId`. The background script reads `externalCampaignId` from the tab's URL query params (set in step 6 of §4).
+
 The background script must:
 
-1. Validate `event.origin` matches the configured vtt-chat platform origin.
-2. Store `deviceCredential` in `localStorage` keyed by `dmlink:<campaignId>:<externalSystem>`.
-3. Use this credential for all future returning DM launches for this campaign.
+1. Listen for URL changes via `browser.tabs.onUpdated`.
+2. Detect the `#VTT_CHAT_DM_LINK_COMPLETE=` fragment in the updated URL.
+3. Decode and parse the base64 payload.
+4. Read `externalCampaignId` from the tab URL's query params.
+5. Store `deviceCredential` in `browser.storage.local` keyed by `dmlink:<externalCampaignId>:<externalSystem>`.
+6. Exchange the credential for a fresh JWT and auto-launch the DM session.
 
 If `merged: true`, the extension may optionally surface a one-time informational toast: _"A prior guest session was merged into your account."_
 
@@ -310,8 +333,8 @@ _This section specifies what the extension repository must implement to support 
 2. Scrape campaign owner user ID (from campaign page DOM or DDB API).
 3. If logged-in user ID === campaign owner user ID:
      → user is DM of this campaign
-     → check localStorage for deviceCredential keyed by (campaignId, externalSystem)
-     → if found: show Returning DM UI (§10.2b)
+     → check browser.storage.local for deviceCredential keyed by (externalCampaignId, externalSystem)
+     → if found: auto-launch DM session (§5) — popup auto-connects when only one linked campaign
      → if not found: show First-Time DM UI (§10.2a)
 4. Else if logged-in user is in the campaign member list:
      → show standard Player Launch UI (existing flow)
@@ -319,7 +342,7 @@ _This section specifies what the extension repository must implement to support 
      → show "You are not a member of this campaign" notice
 ```
 
-Note: `campaignId` at this stage is not yet known (it's the vtt-chat UUID, not the DDB ID). Step 3 checks localStorage for any credential keyed to this `externalCampaignId`. If a matching credential is found, the vtt-chat `campaignId` is retrieved from the stored credential record.
+Note: the vtt-chat `campaignId` (UUID) is not known from the DDB page alone. Step 3 checks `browser.storage.local` for a credential keyed to this `externalCampaignId`. If found, the vtt-chat `campaignId` is retrieved from the stored credential record.
 
 ### 10.2 Extension Popup States (DM)
 
@@ -353,9 +376,9 @@ Note: `campaignId` at this stage is not yet known (it's the vtt-chat UUID, not t
 **On "Link & Launch":**
 
 - Disable button, show spinner
-- Open `/ext-launch?campaignId=<uuid>&hint=<ddb-email>&mode=dm-link` in a new tab
-- Listen for `VTT_CHAT_DM_LINK_COMPLETE` postMessage (§9)
-- On receipt: store credential, close popup
+- Open `/ext-launch?campaignId=<uuid>&mode=dm-link&hint=<email>&externalUserId=<id>&externalCampaignId=<ddb-id>&externalSystem=dndbeyond&deviceId=<uuid>&campaignName=<name>` in a new tab
+- Background detects `#VTT_CHAT_DM_LINK_COMPLETE=` hash via `tabs.onUpdated` (§9)
+- On detection: stores credential, exchanges it, auto-launches DM session
 
 #### 10.2b Returning DM (device credential present)
 
@@ -391,7 +414,7 @@ The `/ext-launch` route with `mode=dm-link` must:
      - On `409 IDENTITY_CONFLICT`: show _"This DDB account is already linked to a different vtt-chat login. Please contact support."_ Do not proceed.
    - **Step 2 — dm-sync:** `POST /api/integrations/external/dm-sync` to update campaign name. Progress label: _"Syncing campaign from D&D Beyond…"_ (best-effort; non-fatal).
    - **Step 3 — session/ensure:** `POST /api/campaigns/:campaignId/session/ensure`. Progress label: _"Preparing your session…"_ Captures the real `sessionId` for the redirect.
-   - **Step 4 — postMessage:** Post `VTT_CHAT_DM_LINK_COMPLETE` to `window.opener` (§9). Progress label: _"Launching campaign…"_
+   - **Step 4 — signal:** Append `#VTT_CHAT_DM_LINK_COMPLETE=<base64>` to the tab URL (§9). Progress label: _"Launching campaign…"_
    - Redirect to campaign workspace via the lobby auto-enter pattern.
 
 ### 10.4 Invite Code Handling
@@ -406,18 +429,18 @@ The `/ext-launch` route with `mode=dm-link` must:
 To avoid hammering the sync endpoint on every page load:
 
 - Throttle: fire `dm-sync` at most once per 10 minutes per campaign.
-- Store the last-sync timestamp in `chrome.storage.session` keyed by `dmsync:<campaignId>`.
+- Store the last-sync timestamp in `browser.storage.local` keyed by `dmsync:<campaignId>`.
 - The **Sync Campaign** button in the popup always bypasses the throttle.
-- On tab open (returning DM launch): check throttle → skip if within window.
+- On returning DM launch: check throttle → skip sync if within window.
 
 ### 10.6 Credential Storage Keys
 
-| Key                                            | Content                                                      | Storage                  |
-| ---------------------------------------------- | ------------------------------------------------------------ | ------------------------ |
-| `dmlink:<externalCampaignId>:<externalSystem>` | `{ campaignId, deviceCredential: { credential, deviceId } }` | `localStorage`           |
-| `dmsync:<campaignId>`                          | `{ lastSyncAt: ISO-string }`                                 | `chrome.storage.session` |
+| Key                                            | Content                                                      | Storage                   |
+| ---------------------------------------------- | ------------------------------------------------------------ | ------------------------- |
+| `dmlink:<externalCampaignId>:<externalSystem>` | `{ campaignId, deviceCredential: { credential, deviceId } }` | `browser.storage.local`   |
+| `dmsync:<campaignId>`                          | `{ lastSyncAt: ISO-string }`                                 | `browser.storage.local`   |
 
-Note: `localStorage` is used here (not `chrome.storage.session`) so the DM credential survives browser restarts, matching the expected behaviour of a returning DM who expects to launch without re-entering their invite code.
+Both keys use `browser.storage.local` so they survive browser restarts. The DM credential must persist so returning DMs never need to re-enter their invite code. The sync throttle persists so dm-sync doesn't re-fire on every service worker restart within the same 10-minute window.
 
 ---
 

@@ -15,15 +15,16 @@ A cross‑browser extension (Firefox, Chrome, Edge) that lets DMs and players la
 
 This extension:
 
-- Detects logged‑in users on supported VTTs
-- Fetches character lists and campaign/campaign details using real platform tokens
+- Detects logged‑in users on supported VTTs (character and campaign list pages)
+- Fetches character lists and campaign details using real platform tokens
 - Determines DM vs player from the VTT API or page context
-- Injects a "Launch VTT‑Chat" button into:
-  - Character sheets you own
-  - Campaign/game pages you are a member of
+- Injects a "Launch VTT‑Chat" button into character sheets and campaign pages
 - Sends a unified onboarding payload to your VTT‑Chat server
-- Supports multiple servers with invite codes
-- Supports "Reopen last session" from the popup
+- Supports multiple VTT‑Chat servers with invite codes
+- **Device credentials**: stores a per-campaign device token on first join so players and DMs never have to re-enter an invite code after the first launch
+- **DM Link flow**: DMs link their VTT‑Chat account to a DDB campaign once; all future launches are automatic (no invite code, no password)
+- **Auto-launch**: popup auto-connects when the user is already linked to the detected campaign
+- Supports "Reopen last session" for returning to an interrupted session
 
 ---
 
