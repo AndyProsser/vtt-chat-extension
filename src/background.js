@@ -646,12 +646,18 @@ async function runDmCampaignSync({ ddbCampaignId, campaignId, bypassThrottle }) 
 // ---------------------------------------------------------------------------
 
 // Opens the ext-launch tab with mode=dm-link for first-time DM account linking.
-async function handleDmLinkLaunch({ serverUrl, campaignId, email, externalCampaignId }) {
+async function handleDmLinkLaunch({ serverUrl, campaignId, email, externalUserId, externalCampaignId, campaignName }) {
   if (!serverUrl || !campaignId || !externalCampaignId) {
     return { ok: false, error: "Missing required parameters for DM link" };
   }
+  const deviceId = await getDeviceId();
   const params = new URLSearchParams({ campaignId, mode: "dm-link" });
   if (email) params.set("hint", email);
+  if (externalUserId) params.set("externalUserId", externalUserId);
+  params.set("externalCampaignId", externalCampaignId);
+  params.set("externalSystem", "dndbeyond");
+  params.set("deviceId", deviceId);
+  if (campaignName) params.set("campaignName", campaignName);
   browser.tabs.create({ url: `${baseServerUrl(serverUrl)}/ext-launch?${params}` });
   return { ok: true };
 }
