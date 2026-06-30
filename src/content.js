@@ -218,6 +218,58 @@ async function fetchCharacterDetails(characterId) {
   return json.data || null;
 }
 
+async function fetchPartyInventory(campaignId) {
+  if (!campaignId) return null;
+  const headers = await buildAuthHeaders();
+  if (!headers.Authorization) return null;
+  try {
+    const res = await fetch(
+      `https://character-service.dndbeyond.com/character/v5/party/inventory/${campaignId}`,
+      { method: "GET", headers }
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.data || null;
+  } catch {
+    return null;
+  }
+}
+
+function extractPartyInventory(data) {
+  if (!data) return null;
+  const items = (data.partyItems || []).map(item => {
+    const def = item.definition || {};
+    const isArmor = def.filterType === "Armor";
+    const isWeapon = def.filterType === "Weapon";
+    const properties = buildItemProperties(def);
+    const armorProperties = isArmor ? buildArmorProperties(def) : null;
+    const damage = buildItemDamage(def);
+    return {
+      id: item.id,
+      name: def.name || null,
+      type: def.filterType || null,
+      subtype: def.subType || null,
+      rarity: def.rarity || null,
+      quantity: item.quantity || 1,
+      ownerId: item.ownerId || null,
+      weight: def.weight || 0,
+      cost: def.cost ?? null,
+      magic: def.magic === true,
+      description: def.snippetDescription || def.description || null,
+      tags: Array.isArray(def.tags) ? def.tags : [],
+      avatarUrl: def.avatarUrl || null,
+      ...(isArmor && armorProperties !== null && { properties: armorProperties }),
+      ...(!isArmor && properties !== null && { properties }),
+      ...(isWeapon && damage !== null && { damage }),
+      ...(isWeapon && def.damageType && { damageType: def.damageType })
+    };
+  });
+  return {
+    items,
+    currency: data.currency || { cp: 0, sp: 0, gp: 0, ep: 0, pp: 0 }
+  };
+}
+
 const DDB_STAT_ID = { 1: "str", 2: "dex", 3: "con", 4: "int", 5: "wis", 6: "cha" };
 
 const SCORE_SUBTYPE = {
@@ -476,7 +528,7 @@ function extractInventory(data) {
   };
 }
 
-function buildFullCharacterPayload(listChar, detailData) {
+function buildFullCharacterPayload(listChar, detailData, partyInventory = null) {
   const race = detailData?.race?.fullName || listChar.race || null;
   const stats = extractCharacterStats(detailData);
   const rawClasses = detailData?.classes || [];
@@ -502,7 +554,8 @@ function buildFullCharacterPayload(listChar, detailData) {
     stats: stats || undefined,
     conditions: extractConditions(detailData || {}),
     features: extractFeatures(detailData || {}),
-    inventory: detailData ? extractInventory(detailData) : null
+    inventory: detailData ? extractInventory(detailData) : null,
+    partyInventory: partyInventory || null
   };
 }
 
@@ -551,7 +604,8 @@ async function buildDmCampaignPayload(ddbCampaignId) {
 
   const members = Array.isArray(details.activeCharacters) ? details.activeCharacters : [];
 
-  const characters = await Promise.all(members.map(async member => {
+  const [characters, rawParty] = await Promise.all([
+    Promise.all(members.map(async member => {
     const charId = member.id;
 
     let detailData = null;
@@ -588,7 +642,9 @@ async function buildDmCampaignPayload(ddbCampaignId) {
       avatarUrl: member.avatarUrl || null,
       characterUrl: `https://www.dndbeyond.com/characters/${charId}`
     };
-  }));
+  })),
+    fetchPartyInventory(ddbCampaignId)
+  ]);
 
   return {
     externalCampaignId: String(details.id || ddbCampaignId),
@@ -601,7 +657,8 @@ async function buildDmCampaignPayload(ddbCampaignId) {
       dateCreated: details.dateCreated || null,
       memberCount: members.length
     },
-    characters
+    characters,
+    partyData: extractPartyInventory(rawParty)
   };
 }
 
@@ -780,8 +837,12 @@ async function handleRefetchCharacter(characterId) {
   const listChar = ddbCharacterList?.find(c => c.id === characterId);
   if (!listChar) return;
 
-  const detailData = await fetchCharacterDetails(characterId);
-  const payload = buildFullCharacterPayload(listChar, detailData);
+  const [detailData, rawParty] = await Promise.all([
+    fetchCharacterDetails(characterId),
+    fetchPartyInventory(listChar.campaignId)
+  ]);
+  const partyInventory = extractPartyInventory(rawParty);
+  const payload = buildFullCharacterPayload(listChar, detailData, partyInventory);
   await browser.runtime.sendMessage({ type: "character-data-updated", payload });
 }
 

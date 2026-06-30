@@ -435,6 +435,14 @@ async function syncCharacterAndCampaign(server, token, campaignId, payload) {
 
   if (characterUpdate && !characterUpdate.externalCharacterId) return;
 
+  const partyInventoryUpdate = Array.isArray(payload?.partyInventory?.items)
+    ? { items: payload.partyInventory.items }
+    : undefined;
+
+  const partyCurrencyUpdate = payload?.partyInventory?.currency
+    ? { currency: payload.partyInventory.currency }
+    : undefined;
+
   const campaignUpdate = campaignPacket ? {
     externalCampaignId: campaignPacket.externalCampaignId || undefined,
     campaignName: campaignPacket.campaignName || undefined,
@@ -455,6 +463,8 @@ async function syncCharacterAndCampaign(server, token, campaignId, payload) {
       characterUpdate,
       inventoryUpdate,
       currencyUpdate,
+      partyInventoryUpdate,
+      partyCurrencyUpdate,
       campaignUpdate
     })
   });
@@ -477,7 +487,8 @@ async function syncDmCampaignData(server, token, campaignId, dmPayload) {
       externalSystem: EXTERNAL_SYSTEM,
       externalCampaignId: dmPayload.externalCampaignId,
       campaignData: dmPayload.campaignData,
-      characters: dmPayload.characters
+      characters: dmPayload.characters,
+      partyData: dmPayload.partyData || undefined
     })
   });
 }
@@ -527,7 +538,8 @@ async function buildDmCampaignPayloadDirect(ddbCampaignId) {
 
   const members = Array.isArray(details.activeCharacters) ? details.activeCharacters : [];
 
-  const characters = await Promise.all(members.map(async member => {
+  const [characters, partyData] = await Promise.all([
+   Promise.all(members.map(async member => {
     const charId = member.id;
     try {
       const res = await fetch(
@@ -560,7 +572,36 @@ async function buildDmCampaignPayloadDirect(ddbCampaignId) {
       avatarUrl: member.avatarUrl || null,
       characterUrl: `https://www.dndbeyond.com/characters/${charId}`
     };
-  }));
+   })),
+   (async () => {
+     try {
+       const res = await fetch(
+         `https://character-service.dndbeyond.com/character/v5/party/inventory/${ddbCampaignId}`,
+         { headers: authHeaders }
+       );
+       if (!res.ok) return null;
+       const json = await res.json();
+       const pd = json.data;
+       if (!pd) return null;
+       return {
+         items: (pd.partyItems || []).map(item => ({
+           id: item.id,
+           name: item.definition?.name || null,
+           type: item.definition?.filterType || null,
+           subtype: item.definition?.subType || null,
+           rarity: item.definition?.rarity || null,
+           quantity: item.quantity || 1,
+           ownerId: item.ownerId || null,
+           weight: item.definition?.weight || 0,
+           cost: item.definition?.cost ?? null
+         })),
+         currency: pd.currency || { cp: 0, sp: 0, gp: 0, ep: 0, pp: 0 }
+       };
+     } catch {
+       return null;
+     }
+   })()
+  ]);
 
   return {
     externalCampaignId: String(details.id || ddbCampaignId),
@@ -573,7 +614,8 @@ async function buildDmCampaignPayloadDirect(ddbCampaignId) {
       dateCreated: details.dateCreated || null,
       memberCount: members.length
     },
-    characters
+    characters,
+    partyData: partyData || null
   };
 }
 
